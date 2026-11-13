@@ -133,6 +133,12 @@ type OrgProvider interface {
 	EnsureOrg(ctx context.Context, name string) error
 }
 
+// RepoDeleter can permanently delete a repository. The engine only calls it
+// for destinations it created, and only when a rule opts into deletion.
+type RepoDeleter interface {
+	DeleteRepo(ctx context.Context, owner, name string) error
+}
+
 // EventKind classifies a webhook delivery.
 type EventKind string
 
