@@ -1,0 +1,9 @@
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+*.db
+*.db-*
+/config.yaml
+.env
