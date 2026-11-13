@@ -460,6 +460,14 @@ func (p *Provider) GitAuth() forge.Auth {
 	return forge.Auth{Username: p.opts.Username, Token: p.opts.Token}
 }
 
+// Login implements forge.Identity; it returns the configured Username.
+func (p *Provider) Login(ctx context.Context) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return p.opts.Username, nil
+}
+
 // RateLimit implements forge.Provider.
 func (p *Provider) RateLimit(ctx context.Context) (forge.Rate, error) {
 	p.mu.Lock()

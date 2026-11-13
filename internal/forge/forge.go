@@ -133,6 +133,12 @@ type OrgProvider interface {
 	EnsureOrg(ctx context.Context, name string) error
 }
 
+// Identity reports the account the provider's token authenticates as. The
+// validate command uses it to check credentials.
+type Identity interface {
+	Login(ctx context.Context) (string, error)
+}
+
 // RepoDeleter can permanently delete a repository. The engine only calls it
 // for destinations it created, and only when a rule opts into deletion.
 type RepoDeleter interface {

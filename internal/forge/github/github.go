@@ -175,6 +175,9 @@ func (p *Provider) wrap(op string, err error) error {
 
 // ---------------------------------------------------------------- identity
 
+// Login implements forge.Identity.
+func (p *Provider) Login(ctx context.Context) (string, error) { return p.login(ctx) }
+
 // login returns the authenticated user's login, fetching it once. Failures
 // are not cached.
 func (p *Provider) login(ctx context.Context) (string, error) {
