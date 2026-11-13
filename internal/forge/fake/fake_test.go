@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
@@ -564,12 +565,96 @@ func TestFailureInjectionEveryErrorMethod(t *testing.T) {
 		"ListStarred":  func() error { _, e := p.ListStarred(ctx, "u"); return e },
 		"EnsureOrg":    func() error { return p.EnsureOrg(ctx, "org") },
 		"ParseWebhook": func() error { _, e := p.ParseWebhook(webhookReq("s", "{}", "auto"), "s"); return e },
+		"DeleteRepo":   func() error { return p.DeleteRepo(ctx, "o", "n") },
 	}
 	for name, fn := range calls {
 		p.FailNext(name, boom)
 		if err := fn(); !errors.Is(err, boom) {
 			t.Errorf("%s did not honour FailNext: %v", name, err)
 		}
+	}
+}
+
+var _ forge.RepoDeleter = (*Provider)(nil)
+
+func TestRemoveRepo(t *testing.T) {
+	requireGit(t)
+	dir := t.TempDir()
+	p := New(Options{GitBaseDir: dir})
+	if err := p.AddRepo(forge.Repo{Owner: "O", Name: "N"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.InitWiki("o", "n"); err != nil {
+		t.Fatal(err)
+	}
+	rel, err := p.CreateRelease(ctx, "o", "n", forge.Release{Tag: "v1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := p.UploadAsset(ctx, "o", "n", rel.ID, forge.Asset{Name: "a"}, strings.NewReader("data"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.AddRepo(forge.Repo{Owner: "o", Name: "other"})
+	before := len(p.Calls())
+
+	p.RemoveRepo("o", "N") // case-insensitive, like every lookup
+	if len(p.Calls()) != before {
+		t.Fatalf("RemoveRepo recorded a call: %v", p.Calls()[before:])
+	}
+	if _, err := p.GetRepo(ctx, "o", "n"); !errors.Is(err, forge.ErrNotFound) {
+		t.Fatalf("GetRepo after RemoveRepo: %v", err)
+	}
+	if _, err := p.ListReleases(ctx, "o", "n"); !errors.Is(err, forge.ErrNotFound) {
+		t.Fatalf("ListReleases after RemoveRepo: %v", err)
+	}
+	if b := p.AssetBytes("o", "n", rel.ID, a.ID); b != nil {
+		t.Fatal("asset bytes survived RemoveRepo")
+	}
+	for _, d := range []string{filepath.Join(dir, "o", "n.git"), filepath.Join(dir, "o", "n.wiki.git")} {
+		if _, err := os.Stat(d); !os.IsNotExist(err) {
+			t.Fatalf("bare dir %s still present: %v", d, err)
+		}
+	}
+	if _, err := p.GetRepo(ctx, "o", "other"); err != nil {
+		t.Fatalf("other repo affected: %v", err)
+	}
+	p.RemoveRepo("o", "absent") // no-op
+	// Re-adding starts fresh: no releases carried over.
+	p.AddRepo(forge.Repo{Owner: "o", Name: "n"})
+	if rels, _ := p.ListReleases(ctx, "o", "n"); len(rels) != 0 {
+		t.Fatalf("releases carried over: %+v", rels)
+	}
+}
+
+func TestDeleteRepo(t *testing.T) {
+	requireGit(t)
+	dir := t.TempDir()
+	p := New(Options{GitBaseDir: dir})
+	p.AddRepo(forge.Repo{Owner: "o", Name: "n"})
+	boom := errors.New("boom")
+	p.FailNext("DeleteRepo", boom)
+	if err := p.DeleteRepo(ctx, "o", "n"); !errors.Is(err, boom) {
+		t.Fatalf("FailNext not honoured: %v", err)
+	}
+	if _, err := p.GetRepo(ctx, "o", "n"); err != nil {
+		t.Fatalf("failed DeleteRepo removed the repo: %v", err)
+	}
+	if err := p.DeleteRepo(ctx, "O", "N"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.GetRepo(ctx, "o", "n"); !errors.Is(err, forge.ErrNotFound) {
+		t.Fatalf("GetRepo after DeleteRepo: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "o", "n.git")); !os.IsNotExist(err) {
+		t.Fatalf("bare dir still present: %v", err)
+	}
+	if err := p.DeleteRepo(ctx, "o", "n"); !errors.Is(err, forge.ErrNotFound) {
+		t.Fatalf("DeleteRepo on absent repo = %v, want ErrNotFound", err)
+	}
+	want := []string{"DeleteRepo", "GetRepo", "DeleteRepo", "GetRepo", "DeleteRepo"}
+	if got := p.Calls(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("calls = %v, want %v", got, want)
 	}
 }
 

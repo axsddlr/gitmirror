@@ -1,4 +1,4 @@
-# NEXT
+﻿# NEXT
 
 Spec and build plan: `C:\Users\aincrad\.claude\plans\i-have-a-idea-tender-swing.md`
 Branch: `build/foundations` (local only, nothing pushed).
@@ -8,8 +8,8 @@ Branch: `build/foundations` (local only, nothing pushed).
 - M0 scaffold: done.
 - M1 foundations: done and verified (`internal/config`, `internal/state`, `internal/forge/fake`).
 - M2 git engine: done and verified (`internal/gitx`).
-- M3 providers: `internal/forge/httpx` (retry transport) done; `internal/forge/github`, `internal/forge/gitea` in progress.
-- M4: `internal/resolve` and `internal/engine` in progress. `internal/resolve/pair.go` and `forge.RepoDeleter` are shared contracts.
+- M3 providers: done and verified (`httpx`, `github`, `gitea`, incl. RepoDeleter).
+- M4: done and verified (`internal/resolve`, `internal/engine`, deletion grace period, gitx raw-stdout fix).
 
 ## Decisions
 
@@ -24,6 +24,8 @@ Branch: `build/foundations` (local only, nothing pushed).
 - git still reads the user's global git config (`url.insteadOf`, global `http.extraHeader`). Decide: set `GIT_CONFIG_GLOBAL` to an empty file in the Docker image, document for bare installs.
 - `${VAR}` inside YAML flow maps must be quoted; README examples must show `token: "${GITHUB_TOKEN}"`.
 - gitx in-process lock map is never pruned (one entry per pair; fine at expected scale).
+- Audit trail: `Store.DeletePair` erases the run that recorded a destination deletion. Keep a durable record (retire the pair instead of deleting it, or a separate audit table).
+- After the deletion grace, archive-fallback outcomes for unowned or already-gone destinations still record a run every reconcile cycle.
 
 ## Local notes
 

@@ -47,7 +47,7 @@ func (c *Config) Validate() error {
 		c.validateForge(n, c.Forges[n], add)
 	}
 
-	validateSettings("defaults", c.Defaults.Interval, c.Defaults.Include, c.Defaults.Visibility, c.Defaults.OnSourceDeleted, true, add)
+	validateSettings("defaults", c.Defaults.Interval, c.Defaults.Include, c.Defaults.Visibility, c.Defaults.OnSourceDeleted, c.Defaults.DeletionGrace, true, add)
 
 	if len(c.Rules) == 0 {
 		add("rules: at least one rule is required")
@@ -88,7 +88,7 @@ func (c *Config) validateForge(name string, f Forge, add func(string, ...any)) {
 	}
 }
 
-func validateSettings(loc, interval string, include []string, visibility, onDeleted string, required bool, add func(string, ...any)) {
+func validateSettings(loc, interval string, include []string, visibility, onDeleted, grace string, required bool, add func(string, ...any)) {
 	if interval != "" || required {
 		if d, err := time.ParseDuration(interval); err != nil {
 			add("%s: interval %q is not a valid duration", loc, interval)
@@ -107,6 +107,13 @@ func validateSettings(loc, interval string, include []string, visibility, onDele
 	if onDeleted != "" || required {
 		if onDeleted != "keep" && onDeleted != "archive" && onDeleted != "delete" {
 			add("%s: on_source_deleted %q must be keep, archive or delete", loc, onDeleted)
+		}
+	}
+	if grace != "" || required {
+		if d, err := time.ParseDuration(grace); err != nil {
+			add("%s: deletion_grace %q is not a valid duration", loc, grace)
+		} else if d < minGrace {
+			add("%s: deletion_grace %s is below the minimum of %s", loc, grace, minGrace)
 		}
 	}
 }
@@ -210,7 +217,7 @@ func (c *Config) validateRule(r Rule, seen map[string]int, idx int, add func(str
 		}
 	}
 
-	validateSettings("", r.Interval, r.Include, r.Visibility, r.OnSourceDeleted, false, func(f string, a ...any) {
+	validateSettings("", r.Interval, r.Include, r.Visibility, r.OnSourceDeleted, r.DeletionGrace, false, func(f string, a ...any) {
 		// Strip the empty "loc: " prefix produced for rule-level settings.
 		add("%s", strings.TrimPrefix(fmt.Sprintf(f, a...), ": "))
 	})

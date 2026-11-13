@@ -146,6 +146,10 @@ func TestDefaultsFilled(t *testing.T) {
 		Include:         []string{"git", "lfs", "settings", "releases", "wiki"},
 		Visibility:      "private",
 		OnSourceDeleted: "keep",
+		DeletionGrace:   24 * time.Hour,
+	}
+	if c.Defaults.DeletionGrace != "24h" {
+		t.Errorf("defaults deletion_grace = %q, want 24h", c.Defaults.DeletionGrace)
 	}
 	if !reflect.DeepEqual(e, want) {
 		t.Errorf("effective = %+v, want %+v", e, want)
@@ -183,6 +187,45 @@ defaults:
 	b := c.Rules[1].Effective(c.Defaults)
 	if b.Visibility != "private" || b.OnSourceDeleted != "delete" || b.DeleteMissingReleases {
 		t.Errorf("b: %+v", b)
+	}
+}
+
+func TestDeletionGrace(t *testing.T) {
+	c := mustParse(t, doc(`
+defaults:
+  deletion_grace: 48h
+`, `
+  - name: a
+    from: {forge: gh, owner: me}
+    to: {forge: home, owner: m}
+  - name: b
+    from: {forge: gh, owner: me}
+    to: {forge: home, owner: m2}
+    deletion_grace: 2h30m
+`), nil, nil)
+	if g := c.Rules[0].Effective(c.Defaults).DeletionGrace; g != 48*time.Hour {
+		t.Errorf("a: deletion grace = %s, want 48h", g)
+	}
+	if g := c.Rules[1].Effective(c.Defaults).DeletionGrace; g != 150*time.Minute {
+		t.Errorf("b: deletion grace = %s, want 2h30m", g)
+	}
+
+	tests := []struct {
+		name, doc, want string
+	}{
+		{"defaults below minimum", doc("defaults: {deletion_grace: 59m}", okRule), "defaults: deletion_grace 59m is below the minimum of 1h"},
+		{"defaults zero", doc("defaults: {deletion_grace: 0s}", okRule), "defaults: deletion_grace"},
+		{"defaults invalid", doc("defaults: {deletion_grace: soon}", okRule), `defaults: deletion_grace "soon" is not a valid duration`},
+		{"defaults 1h ok", doc("defaults: {deletion_grace: 1h}", okRule), ""},
+		{"rule below minimum", okRuleWith("    deletion_grace: 30m\n"), "rules[0] (r1): deletion_grace 30m is below the minimum of 1h"},
+		{"rule invalid", okRuleWith("    deletion_grace: x\n"), `rules[0] (r1): deletion_grace "x" is not a valid duration`},
+		{"rule 1h ok", okRuleWith("    deletion_grace: 1h\n"), ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := parse(t, tt.doc, nil, nil)
+			checkErr(t, err, tt.want)
+		})
 	}
 }
 

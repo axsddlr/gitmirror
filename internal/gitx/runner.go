@@ -124,8 +124,11 @@ func (b *boundedBuffer) String() string {
 	return s
 }
 
-// run executes git and returns its scrubbed stdout. On failure the error is
-// a *cmdError with scrubbed stderr; stdout is still returned.
+// run executes git and returns its raw stdout, which callers parse and which
+// must never be scrubbed (a token may legitimately occur inside ref names or
+// hashes). On failure the error is a *cmdError with scrubbed stderr; stdout is
+// still returned. Callers must scrub any stdout-derived text before it leaves
+// the package in an error or log line.
 func (r *Runner) run(ctx context.Context, s spec) (string, error) {
 	env, err := buildEnv(os.Environ(), r.envExtra(), s.auth...)
 	if err != nil {
@@ -161,7 +164,7 @@ func (r *Runner) run(ctx context.Context, s spec) (string, error) {
 	}
 
 	err = cmd.Run()
-	out := scrub(stdout.String(), s.auth...)
+	out := stdout.String()
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			err = fmt.Errorf("%w (%v)", ctxErr, err)

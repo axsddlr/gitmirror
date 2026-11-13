@@ -1,6 +1,6 @@
 // Package state persists gitmirror's durable safety state in SQLite:
-// destination ownership, per-pair last-known digests, run history and the
-// release id mapping.
+// destination ownership, per-pair last-known digests, run history, the
+// release id mapping and when a pair's source was first seen missing.
 //
 // Times are stored as int64 unix nanoseconds (UTC); 0 means "unset" and is
 // returned as the zero time.Time. Nanosecond storage round-trips exactly.
@@ -493,4 +493,69 @@ func (s *Store) SetReleaseMapping(ctx context.Context, k PairKey, srcID, dstID i
 func (s *Store) DeleteReleaseMapping(ctx context.Context, k PairKey, srcID int64) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM release_map WHERE pair_key = ? AND src_id = ?`, k.String(), srcID)
 	return err
+}
+
+// MarkMissing records that the pair's source was reported as not found and
+// returns when that was first recorded. It is idempotent: repeat calls keep
+// the original first-seen time (the store clock at the first call) until
+// ClearMissing removes the record.
+func (s *Store) MarkMissing(ctx context.Context, k PairKey) (firstSeen time.Time, err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return time.Time{}, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `INSERT INTO missing(pair_key, first_seen) VALUES (?, ?)
+		ON CONFLICT(pair_key) DO NOTHING`, k.String(), s.now().UTC().UnixNano()); err != nil {
+		return time.Time{}, err
+	}
+	var n int64
+	if err := tx.QueryRowContext(ctx, `SELECT first_seen FROM missing WHERE pair_key = ?`, k.String()).Scan(&n); err != nil {
+		return time.Time{}, err
+	}
+	return fromNanos(n), tx.Commit()
+}
+
+// ClearMissing forgets that the pair's source was missing, restarting its
+// deletion grace period. No error if there is no record.
+func (s *Store) ClearMissing(ctx context.Context, k PairKey) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM missing WHERE pair_key = ?`, k.String())
+	return err
+}
+
+// MissingSince returns when the pair's source was first recorded as not
+// found; ok is false if there is no such record.
+func (s *Store) MissingSince(ctx context.Context, k PairKey) (time.Time, bool, error) {
+	var n int64
+	err := s.db.QueryRowContext(ctx, `SELECT first_seen FROM missing WHERE pair_key = ?`, k.String()).Scan(&n)
+	if errors.Is(err, sql.ErrNoRows) {
+		return time.Time{}, false, nil
+	}
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	return fromNanos(n), true, nil
+}
+
+// DeletePair forgets a pair entirely in one transaction: its pair row, run
+// history, release id mappings and missing record. Destination ownership is
+// not touched (see ReleaseOwnership). No error if the pair is unknown.
+func (s *Store) DeletePair(ctx context.Context, k PairKey) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	ks := k.String()
+	for _, q := range []string{
+		`DELETE FROM runs WHERE pair_key = ?`,
+		`DELETE FROM release_map WHERE pair_key = ?`,
+		`DELETE FROM missing WHERE pair_key = ?`,
+		`DELETE FROM pairs WHERE key = ?`,
+	} {
+		if _, err := tx.ExecContext(ctx, q, ks); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }

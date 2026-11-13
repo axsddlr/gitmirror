@@ -31,6 +31,7 @@ var (
 	_ forge.StarProvider    = (*Provider)(nil)
 	_ forge.OrgProvider     = (*Provider)(nil)
 	_ forge.WebhookProvider = (*Provider)(nil)
+	_ forge.RepoDeleter     = (*Provider)(nil)
 )
 
 // SignatureHeader carries the webhook signature.
@@ -241,6 +242,36 @@ func (p *Provider) AddRepo(r forge.Repo) error {
 	return nil
 }
 
+// RemoveRepo deletes a repo, its releases and asset data, and its bare git
+// (and wiki) repositories when GitBaseDir is set, as if it had been deleted
+// on the forge. A missing repo is a no-op.
+func (p *Provider) RemoveRepo(owner, name string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.removeLocked(owner, name)
+}
+
+// removeLocked implements RemoveRepo; the caller must hold p.mu. It reports
+// whether the repo existed.
+func (p *Provider) removeLocked(owner, name string) bool {
+	k := key(owner, name)
+	e, ok := p.repos[k]
+	if !ok {
+		return false
+	}
+	for _, rel := range e.releases {
+		for _, a := range rel.Assets {
+			delete(p.assetData, a.ID)
+		}
+	}
+	delete(p.repos, k)
+	if p.opts.GitBaseDir != "" {
+		os.RemoveAll(p.bareDir(owner, name, false))
+		os.RemoveAll(p.bareDir(owner, name, true))
+	}
+	return true
+}
+
 // Star records that user has starred repo.
 func (p *Provider) Star(user string, repo forge.Repo) {
 	p.mu.Lock()
@@ -437,6 +468,22 @@ func (p *Provider) RateLimit(ctx context.Context) (forge.Rate, error) {
 		return forge.Rate{}, err
 	}
 	return p.rate, nil
+}
+
+// ---- forge.RepoDeleter ----
+
+// DeleteRepo implements forge.RepoDeleter with RemoveRepo's effect; it
+// returns forge.ErrNotFound when the repo does not exist.
+func (p *Provider) DeleteRepo(ctx context.Context, owner, name string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if err := p.begin(ctx, "DeleteRepo"); err != nil {
+		return err
+	}
+	if !p.removeLocked(owner, name) {
+		return p.notFound(owner, name)
+	}
+	return nil
 }
 
 // ---- forge.WikiProvider ----

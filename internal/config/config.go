@@ -43,6 +43,8 @@ const (
 	defaultListen      = ":8080"
 	defaultInterval    = "1h"
 	minInterval        = time.Minute
+	defaultGrace       = "24h"
+	minGrace           = time.Hour
 	redacted           = "[REDACTED]"
 )
 
@@ -109,6 +111,11 @@ type Defaults struct {
 	Visibility string `yaml:"visibility"`
 	// OnSourceDeleted is "keep" (default), "archive" or "delete".
 	OnSourceDeleted string `yaml:"on_source_deleted"`
+	// DeletionGrace is a Go duration string, minimum 1h, default "24h": how
+	// long a source must keep being reported as not found before
+	// OnSourceDeleted is applied. A forge can report a repository as not
+	// found when the token merely lost access to it.
+	DeletionGrace string `yaml:"deletion_grace"`
 	// DeleteMissingReleases removes destination releases that no longer exist at the source.
 	DeleteMissingReleases bool `yaml:"delete_missing_releases"`
 }
@@ -159,6 +166,8 @@ type Rule struct {
 	Visibility string `yaml:"visibility"`
 	// OnSourceDeleted overrides Defaults.OnSourceDeleted when non-empty.
 	OnSourceDeleted string `yaml:"on_source_deleted"`
+	// DeletionGrace overrides Defaults.DeletionGrace when non-empty.
+	DeletionGrace string `yaml:"deletion_grace"`
 	// DeleteMissingReleases overrides Defaults.DeleteMissingReleases when non-nil.
 	DeleteMissingReleases *bool `yaml:"delete_missing_releases"`
 	// Adopt allows writing to a destination repo this tool did not create.
@@ -218,6 +227,7 @@ type RuleSettings struct {
 	Include               []string
 	Visibility            string
 	OnSourceDeleted       string
+	DeletionGrace         time.Duration // how long a source must stay not found before OnSourceDeleted applies
 	DeleteMissingReleases bool
 	Adopt                 bool
 }
@@ -233,7 +243,8 @@ func (s RuleSettings) Includes(feature string) bool {
 }
 
 // Effective returns the rule's settings with its overrides applied over d.
-// It assumes a validated config; an unparsable interval yields zero.
+// It assumes a validated config; an unparsable interval or deletion grace
+// yields zero.
 func (r Rule) Effective(d Defaults) RuleSettings {
 	s := RuleSettings{
 		Include:               append([]string(nil), d.Include...),
@@ -247,6 +258,11 @@ func (r Rule) Effective(d Defaults) RuleSettings {
 		iv = r.Interval
 	}
 	s.Interval, _ = time.ParseDuration(iv)
+	grace := d.DeletionGrace
+	if r.DeletionGrace != "" {
+		grace = r.DeletionGrace
+	}
+	s.DeletionGrace, _ = time.ParseDuration(grace)
 	if r.Include != nil {
 		s.Include = append([]string(nil), r.Include...)
 	}
@@ -361,6 +377,9 @@ func (c *Config) applyDefaults() {
 	}
 	if d.OnSourceDeleted == "" {
 		d.OnSourceDeleted = "keep"
+	}
+	if d.DeletionGrace == "" {
+		d.DeletionGrace = defaultGrace
 	}
 	for i := range c.Rules {
 		r := &c.Rules[i]

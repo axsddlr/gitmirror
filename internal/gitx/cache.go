@@ -304,7 +304,7 @@ func push(ctx context.Context, r *Runner, dir string, dst Remote, prune bool) er
 		rejected, _ = parsePorcelain(out)
 	}
 	if len(rejected) > 0 {
-		return fmt.Errorf("gitx: push to %s: %w: %s", dst, ErrPushRejected, strings.Join(rejected, "; "))
+		return scrubErr(fmt.Errorf("gitx: push to %s: %w: %s", dst, ErrPushRejected, strings.Join(rejected, "; ")), dst)
 	}
 	if err != nil {
 		return fmt.Errorf("gitx: push to %s: %w", dst, err)

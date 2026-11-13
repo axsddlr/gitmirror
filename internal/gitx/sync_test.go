@@ -370,3 +370,90 @@ func TestSyncCommandShapes(t *testing.T) {
 		}
 	}
 }
+
+// tokenCollisionFixture builds refs whose names and hashes contain tok.
+func tokenCollisionFixture(t *testing.T) *fixture {
+	f := newFixture(t)
+	f.commit("a.txt")
+	f.git("tag", "v1")
+	f.git("tag", "-a", "v2", "-m", "annotated")
+	f.git("checkout", "-q", "-b", "feature-v1")
+	f.commit("b.txt")
+	f.push("main", "feature-v1", "v1", "v2")
+	return f
+}
+
+func TestSyncTokenCollidingWithRefNames(t *testing.T) {
+	for _, tok := range []string{"v1", "a", "refs", "e"} {
+		t.Run(tok, func(t *testing.T) {
+			f := tokenCollisionFixture(t)
+			f.srcRemote.Token = tok
+			f.dstRemote.Token = tok
+			res := f.sync(SyncOptions{})
+			want := refsOf(t, f.env, f.src)
+			equalMaps(t, "dst refs", refsOf(t, f.env, f.dst), want)
+			equalStrings(t, "Created", res.Created, []string{"refs/heads/feature-v1", "refs/heads/main", "refs/tags/v1", "refs/tags/v2"})
+			if len(res.SrcRefs) != 4 {
+				t.Fatalf("SrcRefs = %v", res.SrcRefs)
+			}
+			for _, r := range res.SrcRefs {
+				if want[r.Name] != r.Hash {
+					t.Fatalf("SrcRef %+v does not match src %v", r, want)
+				}
+			}
+		})
+	}
+}
+
+func TestLsRemoteTokenCollidingWithRefs(t *testing.T) {
+	for _, tok := range []string{"v1", "a", "refs/tags"} {
+		f := tokenCollisionFixture(t)
+		rem := f.srcRemote
+		rem.Token = tok
+		got, err := f.r.LsRemote(context.Background(), rem)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := refsOf(t, f.env, f.src)
+		m := map[string]string{}
+		for _, r := range got {
+			m[r.Name] = r.Hash
+		}
+		if len(got) != len(want) {
+			t.Fatalf("token %q: got %v, want %v", tok, got, want)
+		}
+		equalMaps(t, "ls-remote "+tok, m, want)
+	}
+}
+
+func TestPushRejectionParsedRawErrorScrubbed(t *testing.T) {
+	f := newFixture(t)
+	tgit(t, f.env, f.dst, "config", "receive.denyNonFastForwards", "true")
+	f.git("checkout", "-q", "-b", "secretbranch-x")
+	f.commit("a.txt")
+	f.commit("b.txt")
+	f.push("secretbranch-x")
+	f.sync(SyncOptions{})
+
+	f.git("reset", "-q", "--hard", "HEAD~1")
+	f.commit("c.txt")
+	f.git("push", "-q", "-f", "origin", "secretbranch-x")
+	f.dstRemote.Token = "secretbranch"
+	_, err := f.c.Sync(context.Background(), f.srcRemote, f.dstRemote, SyncOptions{})
+	if !errors.Is(err, ErrPushRejected) {
+		t.Fatalf("err = %v, want ErrPushRejected", err)
+	}
+	if strings.Contains(err.Error(), "secretbranch") {
+		t.Fatalf("error leaks token: %v", err)
+	}
+	if !strings.Contains(err.Error(), "refs/heads/***-x") {
+		t.Fatalf("error missing scrubbed rejected ref: %v", err)
+	}
+}
+
+func TestParsePorcelainKeepsRawNames(t *testing.T) {
+	rej, n := parsePorcelain("To x\n!\trefs/heads/t:refs/heads/t\t[rejected] (non-fast-forward)\n=\trefs/tags/v1:refs/tags/v1\t[up to date]\nDone\n")
+	if n != 2 || len(rej) != 1 || !strings.HasPrefix(rej[0], "refs/heads/t ") {
+		t.Fatalf("rej=%v n=%d", rej, n)
+	}
+}
