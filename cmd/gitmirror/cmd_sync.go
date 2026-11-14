@@ -16,18 +16,20 @@ import (
 func (c *cli) syncCmd() *cobra.Command {
 	var rules, repos []string
 	var dryRun bool
+	var lockTimeout time.Duration
 	cmd := &cobra.Command{
 		Use:   "sync",
 		Short: "Mirror every pair now",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return c.runSync(cmd, rules, repos, dryRun, false)
+			return c.runSync(cmd, rules, repos, dryRun, false, lockTimeout)
 		},
 	}
 	fl := cmd.Flags()
 	fl.StringArrayVar(&rules, "rule", nil, "only sync this rule (repeatable)")
 	fl.StringArrayVar(&repos, "repo", nil, "only sync this source repo, OWNER/NAME (repeatable; skips reconcile)")
 	fl.BoolVar(&dryRun, "dry-run", false, "compute and print what would change without writing anything")
+	fl.DurationVar(&lockTimeout, "lock-timeout", 0, "wait this long for another gitmirror process to release the state dir (0 = fail at once)")
 	return cmd
 }
 
@@ -38,7 +40,7 @@ func (c *cli) planCmd() *cobra.Command {
 		Short: "Show what a sync would do, without changing anything",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return c.runSync(cmd, rules, repos, true, true)
+			return c.runSync(cmd, rules, repos, true, true, 0)
 		},
 	}
 	fl := cmd.Flags()
@@ -47,13 +49,17 @@ func (c *cli) planCmd() *cobra.Command {
 	return cmd
 }
 
-func (c *cli) runSync(cmd *cobra.Command, rules, repos []string, dryRun, plan bool) error {
+// runSync builds the App and syncs. plan builds it read-only (no state dir
+// lock, nothing written), so it can run next to a serve or sync process.
+func (c *cli) runSync(cmd *cobra.Command, rules, repos []string, dryRun, plan bool, lockTimeout time.Duration) error {
 	cfg, err := c.loadConfigOrExit()
 	if err != nil {
 		return err
 	}
 	opts := appOptions()
 	opts.Logger = c.logger
+	opts.ReadOnly = plan
+	opts.LockTimeout = lockTimeout
 	a, err := app.Build(cmd.Context(), cfg, opts)
 	if err != nil {
 		return &exitError{exitFailed, err}

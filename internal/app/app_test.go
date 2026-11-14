@@ -106,13 +106,18 @@ func (f *fixture) config() *config.Config {
 	return cfg
 }
 
-func (f *fixture) build() *App {
-	f.t.Helper()
-	a, err := Build(context.Background(), f.config(), Options{
+// options returns the Build options used by the fixture's apps.
+func (f *fixture) options() Options {
+	return Options{
 		Providers: map[string]forge.Provider{"src": f.src, "dst": f.dst},
 		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 		GitEnv:    f.gitEnv,
-	})
+	}
+}
+
+func (f *fixture) build() *App {
+	f.t.Helper()
+	a, err := Build(context.Background(), f.config(), f.options())
 	if err != nil {
 		f.t.Fatalf("Build: %v", err)
 	}

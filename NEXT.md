@@ -10,6 +10,9 @@ Branch: `build/foundations` (local only, nothing pushed).
 - M2 git engine: done and verified (`internal/gitx`).
 - M3 providers: done and verified (`httpx`, `github`, `gitea`, incl. RepoDeleter).
 - M4: done and verified (`internal/resolve`, `internal/engine`, deletion grace period, gitx raw-stdout fix).
+- M5 CLI: done and verified. Real-Gitea integration tests in progress (`internal/integration`, build tag `integration`).
+- M6 releases + wiki: built into the engine (M4); real-server proof comes from the integration tests.
+- M7 daemon: done and verified (`internal/server`, `serve`, OS-level state-dir lock, read-only `plan`).
 
 ## Decisions
 
@@ -25,7 +28,8 @@ Branch: `build/foundations` (local only, nothing pushed).
 - `${VAR}` inside YAML flow maps must be quoted; README examples must show `token: "${GITHUB_TOKEN}"`.
 - gitx in-process lock map is never pruned (one entry per pair; fine at expected scale).
 - Audit trail: `Store.DeletePair` erases the run that recorded a destination deletion. Keep a durable record (retire the pair instead of deleting it, or a separate audit table).
-- **Do in M7:** `app.Build` calls `AbandonRunning`, so a cron `sync` started while `serve` is mid-sync would mark the server's live runs aborted. Take an exclusive lock on `<state_dir>` in Build (second process exits with a clear "another gitmirror is using this state dir" error); `plan` must not call AbandonRunning.
+- Webhook bodies (up to 25 MiB) are read before signature verification; cap concurrent unauthenticated reads (semaphore) to bound memory.
+- Scheduled interval counts from enqueue time, not job start (fine with coalescing; document).
 - After the deletion grace, archive-fallback outcomes for unowned or already-gone destinations still record a run every reconcile cycle.
 
 ## Local notes

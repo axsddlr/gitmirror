@@ -12,6 +12,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"gitmirror/internal/config"
 	"gitmirror/internal/engine"
@@ -38,6 +39,14 @@ type Options struct {
 	// GitEnv is appended to the git child environment (tests isolate git
 	// config with it).
 	GitEnv []string
+	// ReadOnly skips the state dir lock and the abandoning of interrupted
+	// runs, so it never disturbs a process that holds the lock. For commands
+	// that do not write state (plan).
+	ReadOnly bool
+	// LockTimeout is how long Build waits for the state dir lock held by
+	// another process: 0 fails immediately, >0 retries every 250ms until it
+	// elapses or ctx is done. Ignored when ReadOnly.
+	LockTimeout time.Duration
 }
 
 // App is a fully wired gitmirror instance.
@@ -47,6 +56,8 @@ type App struct {
 	Store     *state.Store
 	Engine    *engine.Engine
 	Logger    *slog.Logger
+
+	lock *dirLock // nil when ReadOnly or after Close
 }
 
 // SyncResult is the outcome of App.Sync.
@@ -79,6 +90,11 @@ func BuildProviders(cfg *config.Config, o Options) (map[string]forge.Provider, e
 }
 
 // Build wires everything up. The caller must Close the App.
+//
+// Unless o.ReadOnly, Build first takes an exclusive OS-level lock on
+// <StateDir>/gitmirror.lock (held until Close) and then marks runs left
+// "running" by a dead process as aborted. A held lock yields an error
+// wrapping ErrLocked.
 func Build(ctx context.Context, cfg *config.Config, o Options) (*App, error) {
 	log := o.Logger
 	if log == nil {
@@ -102,19 +118,30 @@ func Build(ctx context.Context, cfg *config.Config, o Options) (*App, error) {
 			}
 		}
 	}
+	var lk *dirLock
+	if !o.ReadOnly {
+		if lk, err = acquireLock(ctx, cfg.StateDir, o.LockTimeout); err != nil {
+			return nil, err
+		}
+	}
 	st, err := state.Open(ctx, filepath.Join(cfg.StateDir, "state.db"))
 	if err != nil {
+		lk.release()
 		return nil, err
 	}
-	n, err := st.AbandonRunning(ctx)
-	if err != nil {
-		st.Close()
-		return nil, fmt.Errorf("abandon interrupted runs: %w", err)
-	}
-	if n > 0 {
-		log.Warn("marked interrupted runs as aborted", "count", n)
+	if !o.ReadOnly {
+		n, err := st.AbandonRunning(ctx)
+		if err != nil {
+			st.Close()
+			lk.release()
+			return nil, fmt.Errorf("abandon interrupted runs: %w", err)
+		}
+		if n > 0 {
+			log.Warn("marked interrupted runs as aborted", "count", n)
+		}
 	}
 	return &App{
+		lock:      lk,
 		Config:    cfg,
 		Providers: provs,
 		Store:     st,
@@ -130,8 +157,13 @@ func Build(ctx context.Context, cfg *config.Config, o Options) (*App, error) {
 	}, nil
 }
 
-// Close releases the state store.
-func (a *App) Close() error { return a.Store.Close() }
+// Close releases the state store and then the state dir lock.
+func (a *App) Close() error {
+	err := a.Store.Close()
+	lerr := a.lock.release()
+	a.lock = nil
+	return errors.Join(err, lerr)
+}
 
 // Sync resolves the (optionally filtered) rules, syncs the resulting pairs
 // and, when no repo filter is given, reconciles pairs whose source vanished.

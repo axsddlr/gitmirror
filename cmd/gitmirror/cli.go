@@ -145,7 +145,7 @@ func (c *cli) root() *cobra.Command {
 	f.StringVar(&c.logLevel, "log-level", "info", "log level: debug, info, warn, error")
 	f.StringVar(&c.logFormat, "log-format", "text", "log format: text or json")
 	f.BoolVar(&c.json, "json", false, "machine-readable JSON output on stdout")
-	root.AddCommand(c.syncCmd(), c.planCmd(), c.validateCmd(), c.statusCmd(), c.versionCmd())
+	root.AddCommand(c.syncCmd(), c.planCmd(), c.serveCmd(), c.validateCmd(), c.statusCmd(), c.versionCmd())
 	return root
 }
 
