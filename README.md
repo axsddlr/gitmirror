@@ -9,6 +9,10 @@ It runs once (`gitmirror sync`) or as a daemon (`gitmirror serve`) with schedule
 health endpoints and Prometheus metrics. It is a single static binary; it shells out to `git`
 (and `git-lfs`).
 
+**New here? Follow [docs/getting-started.md](docs/getting-started.md)**: a step-by-step guide from
+building the binary and creating tokens to a first sync, running it permanently and setting up
+webhooks, plus a 5-minute local trial against a throwaway Gitea.
+
 ## Features
 
 * **Git refs**: all branches and tags, including force-pushes and deletions (the destination is pruned).
@@ -90,16 +94,19 @@ destroy data.
 
 ### Binary
 
-Download an archive from the GitHub releases page (`linux`, `darwin`, `windows` for `amd64` and
-`arm64`), verify it against `checksums.txt`, and put `gitmirror` on your `PATH`. Or build from source
-(Go 1.26):
+No releases have been published yet, so build from source (Go 1.26; an older Go 1.21+ downloads
+the toolchain automatically):
 
 ```sh
-go build -trimpath -o gitmirror ./cmd/gitmirror
+go build -trimpath -o gitmirror ./cmd/gitmirror        # Windows: -o gitmirror.exe
 ```
 
-`git` (2.x) must be installed; `git-lfs` is needed for the `lfs` feature. `gitmirror validate`
-checks both.
+Once releases exist: download an archive from the GitHub releases page (`linux`, `darwin`,
+`windows` for `amd64` and `arm64`), verify it against `checksums.txt`, and put `gitmirror` on your
+`PATH`.
+
+`git` 2.32 or later must be installed; `git-lfs` is needed for the `lfs` feature. `gitmirror
+validate` checks both.
 
 ### Docker
 
@@ -138,6 +145,9 @@ run one-shot syncs on a schedule, use [`gitmirror-sync.timer`](deploy/systemd/gi
 alongside it: the state-dir lock makes the second process fail.
 
 ## Quickstart
+
+The short version; [docs/getting-started.md](docs/getting-started.md) walks through each step with
+example output.
 
 1. Copy [`config.example.yaml`](config.example.yaml) to `config.yaml` and edit the forges and rules.
    Provide tokens through environment variables (`token: "${GITHUB_TOKEN}"`) or files (`token_file`).
@@ -316,12 +326,14 @@ Not yet confirmed: whether GitHub rejects a push that touches `.github/workflows
   tripped (outage, lost access or a truly emptied repo). Investigate; the destination was not touched.
 * **`forges.<name>.token: ${VAR} resolved to an empty value`** (same for `server.webhook_secret`): the
   variable is defined but empty or whitespace. Set it, or use `token_file`.
-* **`state dir is locked`.** Another gitmirror (a running `serve`, or a timer-triggered `sync`) holds
+* **`another gitmirror process is using state dir ...`.** Another gitmirror (a running `serve`, or a timer-triggered `sync`) holds
   the state directory. Use only one, or pass `--lock-timeout`.
 * **Permission denied on `/data` in Docker.** The container user is uid 10001; chown the bind mount or
   use a named volume.
 * **Git prompts or a user git config interfere.** gitmirror disables terminal prompts, ignores
   `GIT_CONFIG*` variables and, by default, the host's `/etc/gitconfig` and `~/.gitconfig`.
+* **`listen on :8080: ... bind`.** Another program already uses port 8080. Set `server.listen`
+  (e.g. `"127.0.0.1:18080"`) and, if 9090 is also taken, `server.metrics_listen`.
 * **TLS or proxy errors that a plain `git clone` does not hit.** The host git config is ignored by
   default: set `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY` and `GIT_SSL_CAINFO` in gitmirror's environment,
   or set `git: {use_host_config: true}` if git needs host settings (e.g. `http.sslBackend=schannel` on Windows).
