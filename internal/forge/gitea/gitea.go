@@ -545,7 +545,20 @@ func (p *Provider) EnsureOrg(ctx context.Context, name string) error {
 	if strings.EqualFold(login, name) {
 		return nil
 	}
-	_, err = p.do(ctx, http.MethodPost, "/orgs", nil, map[string]any{"username": name, "visibility": "private"}, nil)
+	for i := 0; ; i++ {
+		_, err = p.do(ctx, http.MethodPost, "/orgs", nil, map[string]any{"username": name, "visibility": "private"}, nil)
+		if !isOrgRace(err) || i >= len(releaseRaceBackoff) {
+			break
+		}
+		// Two creators raced on the same name and Gitea answered 500. Give
+		// the winner a moment, then see whether the organisation exists.
+		if serr := releaseSleep(ctx, releaseRaceBackoff[i]); serr != nil {
+			return fmt.Errorf("%w (last error: %v)", serr, err)
+		}
+		if _, gerr := p.do(ctx, http.MethodGet, "/orgs/"+n, nil, nil, nil); gerr == nil {
+			return nil
+		}
+	}
 	var ae *apiError
 	if errors.As(err, &ae) && ae.status == http.StatusUnprocessableEntity && strings.Contains(strings.ToLower(ae.message), "already exist") {
 		// Gitea answers "user already exists [name: x]" both when an
@@ -561,6 +574,17 @@ func (p *Provider) EnsureOrg(ctx context.Context, name string) error {
 		return gerr
 	}
 	return err
+}
+
+// isOrgRace reports whether err is Gitea's UNIQUE-constraint 500 from two
+// concurrent organisation inserts of the same name.
+func isOrgRace(err error) bool {
+	var ae *apiError
+	if !errors.As(err, &ae) || ae.status != http.StatusInternalServerError {
+		return false
+	}
+	m := strings.ToLower(ae.message)
+	return strings.Contains(m, "unique constraint") && strings.Contains(m, "user.name")
 }
 
 // ---- releases ----
@@ -634,11 +658,65 @@ func (p *Provider) CreateRelease(ctx context.Context, owner, name string, r forg
 		}
 		_, err = p.do(ctx, http.MethodPost, rp+"/releases", nil, releaseBody(r), &a)
 	}
+	// After a push Gitea's background tag sync inserts a tag-only release row
+	// per tag; a POST racing that insert fails with a UNIQUE violation. A
+	// moment later Gitea converts the row into a full release, so retry.
+	for _, d := range releaseRaceBackoff {
+		if !isTagRace(err) {
+			break
+		}
+		if serr := releaseSleep(ctx, d); serr != nil {
+			return nil, fmt.Errorf("%w (last error: %v)", serr, err)
+		}
+		// Tag-only rows are hidden from the API (404); a visible release
+		// means someone else already created it, so make it match instead.
+		var ex apiRelease
+		if _, gerr := p.do(ctx, http.MethodGet, rp+"/releases/tags/"+strings.ReplaceAll(url.PathEscape(r.Tag), "%2F", "/"), nil, nil, &ex); gerr == nil && ex.ID != 0 {
+			return p.UpdateRelease(ctx, owner, name, withID(r, ex.ID))
+		}
+		a = apiRelease{}
+		_, err = p.do(ctx, http.MethodPost, rp+"/releases", nil, releaseBody(r), &a)
+	}
 	if err != nil {
 		return nil, err
 	}
 	out := p.release(a)
 	return &out, nil
+}
+
+func withID(r forge.Release, id int64) forge.Release { r.ID = id; return r }
+
+// releaseRaceBackoff are the delays between CreateRelease retries on the
+// tag-sync race (total 7.5s); releaseSleep waits for one, honouring ctx.
+var (
+	releaseRaceBackoff = []time.Duration{500 * time.Millisecond, time.Second, 2 * time.Second, 4 * time.Second}
+	releaseSleep       = func(ctx context.Context, d time.Duration) error {
+		t := time.NewTimer(d)
+		defer t.Stop()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-t.C:
+			return nil
+		}
+	}
+)
+
+// isTagRace reports whether err is Gitea's UNIQUE-constraint 500 (or a 409
+// "already exists") caused by the background tag sync racing a release POST.
+func isTagRace(err error) bool {
+	var ae *apiError
+	if !errors.As(err, &ae) {
+		return false
+	}
+	m := strings.ToLower(ae.message)
+	switch ae.status {
+	case http.StatusInternalServerError:
+		return strings.Contains(m, "unique constraint") && strings.Contains(m, "tag_name")
+	case http.StatusConflict:
+		return strings.Contains(m, "already exists")
+	}
+	return false
 }
 
 // emptyWait bounds waitNotEmpty; emptyPoll is its polling interval.

@@ -975,3 +975,239 @@ func TestCreateReleaseWaitsForPushedRepo(t *testing.T) {
 		t.Errorf("stuck: %d posts, want 1", posts)
 	}
 }
+
+// ---- tag-sync race on CreateRelease ----
+
+const uniqueMsg = "constraint failed: UNIQUE constraint failed: release.repo_id, release.tag_name (2067)"
+
+// instantBackoff replaces the retry sleep and records the requested delays.
+func instantBackoff(t *testing.T) *[]time.Duration {
+	t.Helper()
+	old := releaseSleep
+	var got []time.Duration
+	releaseSleep = func(c context.Context, d time.Duration) error {
+		got = append(got, d)
+		return c.Err()
+	}
+	t.Cleanup(func() { releaseSleep = old })
+	return &got
+}
+
+func TestCreateReleaseRetriesTagSyncRace(t *testing.T) {
+	instantBackoff(t)
+	posts := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/v1/repos/o/n/releases", func(w http.ResponseWriter, r *http.Request) {
+		posts++
+		if posts == 1 {
+			msg(w, 500, uniqueMsg)
+			return
+		}
+		writeJSON(w, 201, map[string]any{"id": 9, "tag_name": "v1"})
+	})
+	mux.HandleFunc("GET /api/v1/repos/o/n/releases/tags/v1", func(w http.ResponseWriter, r *http.Request) {
+		msg(w, 404, "not found") // tag-only rows are not visible
+	})
+	srv, _ := serve(t, mux)
+	rel, err := newProv(t, srv.URL).CreateRelease(ctx(), "o", "n", forge.Release{Tag: "v1"})
+	if err != nil || rel.ID != 9 {
+		t.Fatalf("%+v %v", rel, err)
+	}
+	if posts != 2 {
+		t.Errorf("posts = %d, want 2", posts)
+	}
+}
+
+func TestCreateReleasePersistentRaceIsBounded(t *testing.T) {
+	delays := instantBackoff(t)
+	posts := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/v1/repos/o/n/releases", func(w http.ResponseWriter, r *http.Request) {
+		posts++
+		msg(w, 500, strings.ToLower(uniqueMsg))
+	})
+	mux.HandleFunc("GET /api/v1/repos/o/n/releases/tags/v1", func(w http.ResponseWriter, r *http.Request) {
+		msg(w, 404, "not found")
+	})
+	srv, _ := serve(t, mux)
+	_, err := newProv(t, srv.URL).CreateRelease(ctx(), "o", "n", forge.Release{Tag: "v1"})
+	if err == nil || !strings.Contains(err.Error(), "tag_name") {
+		t.Fatalf("err = %v", err)
+	}
+	if posts != 5 || len(*delays) != 4 {
+		t.Errorf("posts=%d delays=%v, want 5 posts and 4 delays", posts, *delays)
+	}
+	var total time.Duration
+	for _, d := range *delays {
+		total += d
+	}
+	if total > 8*time.Second {
+		t.Errorf("total backoff %v > 8s", total)
+	}
+	if strings.Contains(err.Error(), tok) {
+		t.Error("token leaked")
+	}
+}
+
+func TestCreateReleaseOther500NotRetried(t *testing.T) {
+	instantBackoff(t)
+	posts := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/v1/repos/o/n/releases", func(w http.ResponseWriter, r *http.Request) {
+		posts++
+		msg(w, 500, "boom")
+	})
+	srv, _ := serve(t, mux)
+	_, err := newProv(t, srv.URL).CreateRelease(ctx(), "o", "n", forge.Release{Tag: "v1"})
+	if err == nil || posts != 1 {
+		t.Fatalf("err=%v posts=%d, want error and 1 post", err, posts)
+	}
+}
+
+func TestCreateReleaseRaceCtxCancelled(t *testing.T) {
+	c, cancel := context.WithCancel(context.Background())
+	old := releaseSleep
+	releaseSleep = func(cc context.Context, d time.Duration) error { cancel(); return cc.Err() }
+	t.Cleanup(func() { releaseSleep = old })
+	posts := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/v1/repos/o/n/releases", func(w http.ResponseWriter, r *http.Request) {
+		posts++
+		msg(w, 500, uniqueMsg)
+	})
+	mux.HandleFunc("GET /api/v1/repos/o/n/releases/tags/v1", func(w http.ResponseWriter, r *http.Request) {
+		msg(w, 404, "not found")
+	})
+	srv, _ := serve(t, mux)
+	_, err := newProv(t, srv.URL).CreateRelease(c, "o", "n", forge.Release{Tag: "v1"})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if posts != 1 {
+		t.Errorf("posts = %d, want 1", posts)
+	}
+}
+
+func TestCreateReleaseRaceRealReleaseIsPatched(t *testing.T) {
+	instantBackoff(t)
+	posts := 0
+	var patched map[string]any
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/v1/repos/o/n/releases", func(w http.ResponseWriter, r *http.Request) {
+		posts++
+		msg(w, 500, uniqueMsg)
+	})
+	mux.HandleFunc("GET /api/v1/repos/o/n/releases/tags/v1", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, map[string]any{"id": 42, "tag_name": "v1"})
+	})
+	mux.HandleFunc("PATCH /api/v1/repos/o/n/releases/42", func(w http.ResponseWriter, r *http.Request) {
+		patched = readBody(t, r)
+		writeJSON(w, 200, map[string]any{"id": 42, "tag_name": "v1", "name": "Rel", "body": "b"})
+	})
+	srv, _ := serve(t, mux)
+	rel, err := newProv(t, srv.URL).CreateRelease(ctx(), "o", "n", forge.Release{Tag: "v1", Name: "Rel", Body: "b"})
+	if err != nil || rel.ID != 42 || rel.Name != "Rel" {
+		t.Fatalf("%+v %v", rel, err)
+	}
+	if posts != 1 {
+		t.Errorf("posts = %d, want 1 (no POST after a real release is seen)", posts)
+	}
+	if patched["name"] != "Rel" || patched["body"] != "b" {
+		t.Errorf("patch body = %v", patched)
+	}
+}
+
+// ---- org-creation race on EnsureOrg ----
+
+const orgUniqueMsg = "insert organization: constraint failed: UNIQUE constraint failed: user.name (2067)"
+
+func orgMux(t *testing.T, posts *int, post http.HandlerFunc, org http.HandlerFunc) *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/user", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, map[string]any{"login": "me"}) })
+	mux.HandleFunc("GET /api/v1/orgs/{o}", org)
+	mux.HandleFunc("POST /api/v1/orgs", func(w http.ResponseWriter, r *http.Request) { *posts++; post(w, r) })
+	return mux
+}
+
+func TestEnsureOrgRaceThenExists(t *testing.T) {
+	instantBackoff(t)
+	posts := 0
+	mux := orgMux(t, &posts,
+		func(w http.ResponseWriter, r *http.Request) { msg(w, 500, orgUniqueMsg) },
+		func(w http.ResponseWriter, r *http.Request) {
+			if posts > 0 {
+				writeJSON(w, 200, map[string]any{})
+				return
+			}
+			msg(w, 404, "nope")
+		})
+	srv, _ := serve(t, mux)
+	if err := newProv(t, srv.URL).EnsureOrg(ctx(), "mirrors"); err != nil {
+		t.Fatal(err)
+	}
+	if posts != 1 {
+		t.Errorf("posts = %d, want 1", posts)
+	}
+}
+
+func TestEnsureOrgPersistentRaceIsBounded(t *testing.T) {
+	delays := instantBackoff(t)
+	posts := 0
+	mux := orgMux(t, &posts,
+		func(w http.ResponseWriter, r *http.Request) { msg(w, 500, strings.ToLower(orgUniqueMsg)) },
+		func(w http.ResponseWriter, r *http.Request) { msg(w, 404, "nope") })
+	srv, _ := serve(t, mux)
+	err := newProv(t, srv.URL).EnsureOrg(ctx(), "mirrors")
+	if err == nil || !strings.Contains(err.Error(), "user.name") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(*delays) != 4 || posts != 5 {
+		t.Errorf("posts=%d delays=%v, want 5 posts, 4 delays", posts, *delays)
+	}
+}
+
+func TestEnsureOrgOther500NotRetried(t *testing.T) {
+	instantBackoff(t)
+	posts := 0
+	mux := orgMux(t, &posts,
+		func(w http.ResponseWriter, r *http.Request) { msg(w, 500, "boom") },
+		func(w http.ResponseWriter, r *http.Request) { msg(w, 404, "nope") })
+	srv, _ := serve(t, mux)
+	if err := newProv(t, srv.URL).EnsureOrg(ctx(), "mirrors"); err == nil || posts != 1 {
+		t.Fatalf("err=%v posts=%d, want error and 1 post", err, posts)
+	}
+}
+
+func TestEnsureOrgRaceNameIsUser(t *testing.T) {
+	instantBackoff(t)
+	posts := 0
+	mux := orgMux(t, &posts,
+		func(w http.ResponseWriter, r *http.Request) {
+			if posts == 1 {
+				msg(w, 500, orgUniqueMsg)
+				return
+			}
+			msg(w, 422, "user already exists [name: carol]")
+		},
+		func(w http.ResponseWriter, r *http.Request) { msg(w, 404, "nope") })
+	srv, _ := serve(t, mux)
+	err := newProv(t, srv.URL).EnsureOrg(ctx(), "carol")
+	if err == nil || !strings.Contains(err.Error(), "existing user") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestEnsureOrgRaceCtxCancelled(t *testing.T) {
+	c, cancel := context.WithCancel(context.Background())
+	old := releaseSleep
+	releaseSleep = func(cc context.Context, d time.Duration) error { cancel(); return cc.Err() }
+	t.Cleanup(func() { releaseSleep = old })
+	posts := 0
+	mux := orgMux(t, &posts,
+		func(w http.ResponseWriter, r *http.Request) { msg(w, 500, orgUniqueMsg) },
+		func(w http.ResponseWriter, r *http.Request) { msg(w, 404, "nope") })
+	srv, _ := serve(t, mux)
+	if err := newProv(t, srv.URL).EnsureOrg(c, "mirrors"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v", err)
+	}
+}
