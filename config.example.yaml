@@ -1,0 +1,139 @@
+# gitmirror example configuration. Full reference: docs/configuration.md
+#
+# Unknown keys are errors. Check this file with:
+#   gitmirror validate --offline -c config.yaml     (config + local tools only)
+#   gitmirror validate -c config.yaml               (also credentials + listings)
+#
+# String values may reference environment variables:
+#   ${VAR}            the value of VAR (error if VAR is unset)
+#   ${VAR:-default}   VAR, or "default" when VAR is unset or empty
+#   $${               a literal "${"
+# Expansion happens after YAML parsing, so a value can never inject YAML.
+# IMPORTANT: inside flow maps ({ ... }) quote it: token: "${GITHUB_TOKEN}".
+# An unquoted ${...} inside { } is invalid YAML.
+
+# Directory for the sqlite state database, the git cache and the lock file.
+# Default: ./data   (relative to the working directory).
+# Docker image: use /data. systemd unit: use /var/lib/gitmirror.
+state_dir: ./data
+
+# Rules/repos processed in parallel. Range 1..64. Default: 4.
+concurrency: 4
+
+# --------------------------------------------------------------------------
+# Forges: named connections that rules refer to. Names must match
+# ^[a-z0-9][a-z0-9_-]*$. Known types: github, gitea (also use "gitea" for
+# Forgejo). Exactly one of token / token_file is required per forge.
+# --------------------------------------------------------------------------
+forges:
+  github:
+    type: github                    # required
+    # url: optional for github (default https://api.github.com); required for gitea.
+    #      Must be an absolute http(s) URL; trailing slashes are trimmed.
+    token: "${GITHUB_TOKEN}"        # API token (also used for git over HTTPS)
+    # token_file: /run/secrets/github_token   # alternative: file whose trimmed contents are the token
+    # username: x-access-token      # git-over-HTTP username; default x-access-token (github), git (gitea)
+
+  # Flow-map style is fine too, but ${...} MUST be quoted:
+  # (token_file works the same way: token_file: "/run/secrets/gitea_token")
+  gitea: { type: gitea, url: "${GITEA_URL:-https://git.example.com}", token: "${GITEA_TOKEN}" }
+
+# --------------------------------------------------------------------------
+# Defaults every rule inherits unless it overrides them.
+# --------------------------------------------------------------------------
+defaults:
+  # How often each rule runs under `serve`. Go duration, minimum 1m. Default: 1h.
+  interval: 1h
+  # What to mirror. Any of: git, lfs, settings, releases, wiki. Default: all five.
+  # lfs, releases and wiki require git. Must not be empty.
+  include: [git, lfs, settings, releases, wiki]
+  # Visibility of destination repos: "private" (default) or "match-source".
+  # A destination is never made more public than its source.
+  visibility: private
+  # What to do when a source repo is gone: "keep" (default), "archive" or "delete".
+  # "delete" only ever removes destinations gitmirror itself created.
+  on_source_deleted: keep
+  # The source must keep reporting "not found" this long before on_source_deleted
+  # is applied (a token that lost access also looks like "not found").
+  # Go duration, minimum 1h. Default: 24h.
+  deletion_grace: 24h
+  # Delete destination releases that no longer exist at the source
+  # (only releases gitmirror created). Default: false.
+  delete_missing_releases: false
+
+# --------------------------------------------------------------------------
+# Server settings for `gitmirror serve` (webhooks, /healthz, /readyz, /metrics).
+# --------------------------------------------------------------------------
+server:
+  # Listen address. Default ":8080".
+  listen: ":8080"
+  # Shared secret that signs webhook deliveries. When neither webhook_secret nor
+  # webhook_secret_file is set, POST /webhook/<forge> answers 404 (disabled).
+  # Set at most one of the two.
+  webhook_secret: "${WEBHOOK_SECRET}"
+  # webhook_secret_file: /run/secrets/webhook_secret
+
+# --------------------------------------------------------------------------
+# Rules: each rule is ONE-WAY, from.forge -> to.forge. At least one is required.
+# `name` is unique and matches ^[a-z0-9][a-z0-9_-]*$.
+# `from` takes exactly one of owner / starred_by / repo.
+# `to` takes exactly one of owner (+ optional name template) / repo.
+# Per-rule keys override `defaults`: interval, include, visibility,
+# on_source_deleted, deletion_grace, delete_missing_releases. `adopt` is rule-only.
+# --------------------------------------------------------------------------
+rules:
+  # 1. Owner rule: mirror every repo of a user/org (GitHub -> Gitea).
+  - name: my-github-repos
+    from:
+      forge: github
+      owner: octocat
+      # filter narrows owner / starred_by selections (not allowed with `repo`).
+      filter:
+        forks: false             # include forks. Default: false
+        archived: true           # include archived repos. Default: true
+        private: true            # include private repos. Default: true
+        include: ["*"]           # path.Match patterns on the repo NAME. Default: ["*"]
+        exclude: ["scratch-*", "*-old"]   # path.Match patterns on the repo name. Default: none
+    to:
+      forge: gitea
+      owner: mirrors             # template; {{.Owner}} and {{.Name}} are the source's
+      name: "{{.Name}}"          # template. Default: "{{.Name}}"
+    # Destination owner/name parts must match ^[A-Za-z0-9._-]+$ and not end in .git.
+
+  # 2. Starred rule: mirror everything a user has starred, with per-rule overrides.
+  - name: octocat-stars
+    from:
+      forge: github
+      starred_by: octocat
+      filter:
+        forks: true
+        exclude: ["*-archive"]
+    to:
+      forge: gitea
+      owner: stars
+      name: "{{.Owner}}-{{.Name}}"     # avoid name clashes between different owners
+    interval: 6h                       # override defaults.interval
+    include: [git, lfs, settings]      # no releases, no wiki
+    visibility: private
+    on_source_deleted: archive         # archive the copy once the source is gone ...
+    deletion_grace: 72h                # ... but only after it has been missing for 72h
+
+  # 3. Literal repo rule in the REVERSE direction (Gitea -> GitHub), adopting an
+  #    existing destination repo and cleaning up releases.
+  - name: notes-backup
+    from:
+      forge: gitea
+      repo: team/infra-notes
+    to:
+      forge: github
+      repo: octocat/infra-notes-backup  # literal owner/name (no `name` allowed here)
+    # adopt: allow writing into a destination that gitmirror did NOT create.
+    # Default false: gitmirror refuses to touch pre-existing repos. The adopted
+    # repo's refs not present at the source WILL be pruned, so only adopt
+    # repos that are meant to be pure mirrors.
+    adopt: true
+    include: [git, settings, releases]
+    delete_missing_releases: true
+    visibility: match-source           # destination public only if the source is public
+    on_source_deleted: delete          # adopted repos are archived instead of deleted
+    deletion_grace: 48h

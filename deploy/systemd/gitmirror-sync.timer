@@ -1,0 +1,17 @@
+# /etc/systemd/system/gitmirror-sync.timer
+# Runs gitmirror-sync.service hourly. Enable with:
+#   systemctl enable --now gitmirror-sync.timer
+# Do NOT enable it together with gitmirror.service (serve).
+# `sync` mirrors every rule on each run; the per-rule `interval` setting only
+# applies to `serve`.
+
+[Unit]
+Description=gitmirror: hourly sync
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

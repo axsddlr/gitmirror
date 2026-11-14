@@ -1,0 +1,11 @@
+.git
+.github
+data/
+dist/
+*.db
+*.db-*
+config.yaml
+.env
+*.exe
+*.test
+*.out

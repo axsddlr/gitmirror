@@ -1,0 +1,70 @@
+# gitmirror with Docker Compose.
+#
+#   mkdir -p secrets && printf '%s' "<github token>" > secrets/github_token
+#   printf '%s' "<gitea token>"   > secrets/gitea_token
+#   printf '%s' "<webhook secret>" > secrets/webhook_secret
+#   cp ../config.example.yaml config.yaml    # edit: state_dir: /data, token_file entries (see below)
+#   docker compose up -d
+#
+# In config.yaml refer to the secrets by path instead of embedding tokens:
+#   state_dir: /data
+#   forges:
+#     github: { type: github, token_file: /run/secrets/github_token }
+#     gitea:  { type: gitea, url: "https://git.example.com", token_file: /run/secrets/gitea_token }
+#   server:
+#     webhook_secret_file: /run/secrets/webhook_secret
+#
+# Secret files must be readable by uid 10001 (the container user): chmod 0444, or
+# chown 10001 on the host. The image runs as non-root uid/gid 10001.
+services:
+  gitmirror:
+    image: ghcr.io/OWNER/gitmirror:latest   # replace OWNER, or use `build: ..` to build locally
+    # build:
+    #   context: ..
+    #   args: { VERSION: dev }
+    restart: unless-stopped
+    command: ["serve"]
+    ports:
+      - "8080:8080"          # webhooks, /healthz, /readyz, /metrics. Put a TLS reverse proxy in front.
+    volumes:
+      - ./config.yaml:/config/config.yaml:ro
+      - gitmirror-data:/data
+    secrets:
+      - github_token
+      - gitea_token
+      - webhook_secret
+    # serve lets running syncs finish for up to 10 minutes after SIGTERM; give it more
+    # than Docker's default 10 s stop timeout so a restart does not abort a sync.
+    stop_grace_period: 11m
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Optional: a throw-away Gitea to try gitmirror against (uncomment, then create a
+  # user + token at http://localhost:3000 and point a `gitea` forge at http://gitea:3000).
+  # gitea:
+  #   image: gitea/gitea:1.24
+  #   restart: unless-stopped
+  #   environment:
+  #     GITEA__security__INSTALL_LOCK: "true"
+  #     GITEA__server__ROOT_URL: http://localhost:3000/
+  #     GITEA__webhook__ALLOWED_HOST_LIST: gitmirror   # let Gitea call the gitmirror webhook receiver
+  #   ports:
+  #     - "3000:3000"
+  #   volumes:
+  #     - gitea-data:/data
+
+secrets:
+  github_token:
+    file: ./secrets/github_token
+  gitea_token:
+    file: ./secrets/gitea_token
+  webhook_secret:
+    file: ./secrets/webhook_secret
+
+volumes:
+  gitmirror-data:
+  # gitea-data:

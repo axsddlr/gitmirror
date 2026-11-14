@@ -24,7 +24,7 @@ Branch: `build/foundations` (local only, nothing pushed).
 ## Open items for hardening (M9)
 
 - Empty-but-set token env var gives "one of token or token_file is required" instead of naming the variable.
-- git still reads the user's global git config (`url.insteadOf`, global `http.extraHeader`). Decide: set `GIT_CONFIG_GLOBAL` to an empty file in the Docker image, document for bare installs.
+- git still reads the user's global/system git config (`url.insteadOf` could redirect a remote; a global `http.extraHeader` would be sent too). Setting `GIT_CONFIG_GLOBAL` in Docker does NOT work because gitx strips every `GIT_CONFIG*` var. Fix in gitx: isolate by default (`GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=<empty file>`), with a config opt-out `git.use_host_config: true`; document that proxies/CAs then come from `HTTPS_PROXY` / `GIT_SSL_CAINFO` env.
 - `${VAR}` inside YAML flow maps must be quoted; README examples must show `token: "${GITHUB_TOKEN}"`.
 - gitx in-process lock map is never pruned (one entry per pair; fine at expected scale).
 - Audit trail: `Store.DeletePair` erases the run that recorded a destination deletion. Keep a durable record (retire the pair instead of deleting it, or a separate audit table).

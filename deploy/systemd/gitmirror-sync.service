@@ -1,0 +1,44 @@
+# /etc/systemd/system/gitmirror-sync.service
+# One-shot sync, started by gitmirror-sync.timer. Alternative to gitmirror.service.
+#
+# Use serve (gitmirror.service) OR this timer, not both: the state directory lock
+# allows one gitmirror process at a time, so the second one fails to start.
+# (--lock-timeout makes a sync wait for the lock instead of failing at once.)
+#
+# gitmirror exit codes: 0 ok, 1 failed, 2 usage/config error, 3 partial. Exit 3 is
+# treated as success here so a partial run does not mark the unit failed; remove
+# SuccessExitStatus to be alerted on it.
+# See gitmirror.service for config and credential setup.
+
+[Unit]
+Description=gitmirror: one-shot sync
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=gitmirror
+Group=gitmirror
+ExecStart=/usr/local/bin/gitmirror sync -c /etc/gitmirror/config.yaml --lock-timeout 1m
+SuccessExitStatus=3
+WorkingDirectory=/var/lib/gitmirror
+StateDirectory=gitmirror
+StateDirectoryMode=0750
+Environment=HOME=/var/lib/gitmirror
+LoadCredential=github_token:/etc/gitmirror/credentials/github_token
+LoadCredential=webhook_secret:/etc/gitmirror/credentials/webhook_secret
+# add one LoadCredential= line per token_file / webhook_secret_file the config uses; the
+# config is validated at start, so a referenced but missing credential file fails the run
+TimeoutStartSec=6h
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadWritePaths=/var/lib/gitmirror

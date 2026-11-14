@@ -1,0 +1,115 @@
+# GoReleaser v2 configuration. Check with:
+#   go run github.com/goreleaser/goreleaser/v2@latest check
+# Local dry run (no publishing):
+#   go run github.com/goreleaser/goreleaser/v2@latest release --snapshot --clean --skip=docker
+version: 2
+
+project_name: gitmirror
+
+before:
+  hooks:
+    - go mod tidy -diff
+
+builds:
+  - id: gitmirror
+    main: ./cmd/gitmirror
+    binary: gitmirror
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - README.md
+      - config.example.yaml
+      - docs/*.md
+      # TODO: add a LICENSE file to the repository, then uncomment:
+      # - LICENSE
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  use: git
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
+      order: 0
+    - title: Bug fixes
+      regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
+      order: 1
+    - title: Other
+      order: 999
+  filters:
+    exclude:
+      - '^docs?(\(.+\))?:'
+      - '^test(\(.+\))?:'
+      - '^chore(\(.+\))?:'
+      - '^ci(\(.+\))?:'
+      - "^Merge "
+
+# Container images. REPLACE `OWNER` with your GitHub user or organisation
+# (must be lower case for ghcr.io).
+dockers:
+  - id: linux-amd64
+    goos: linux
+    goarch: amd64
+    ids: [gitmirror]
+    dockerfile: deploy/Dockerfile.goreleaser
+    use: buildx
+    image_templates:
+      - "ghcr.io/OWNER/gitmirror:{{ .Version }}-amd64"
+    build_flag_templates:
+      - "--platform=linux/amd64"
+      - "--label=org.opencontainers.image.title=gitmirror"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.source=https://github.com/OWNER/gitmirror"
+  - id: linux-arm64
+    goos: linux
+    goarch: arm64
+    ids: [gitmirror]
+    dockerfile: deploy/Dockerfile.goreleaser
+    use: buildx
+    image_templates:
+      - "ghcr.io/OWNER/gitmirror:{{ .Version }}-arm64"
+    build_flag_templates:
+      - "--platform=linux/arm64"
+      - "--label=org.opencontainers.image.title=gitmirror"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.source=https://github.com/OWNER/gitmirror"
+
+docker_manifests:
+  - name_template: "ghcr.io/OWNER/gitmirror:{{ .Version }}"
+    image_templates:
+      - "ghcr.io/OWNER/gitmirror:{{ .Version }}-amd64"
+      - "ghcr.io/OWNER/gitmirror:{{ .Version }}-arm64"
+  - name_template: "ghcr.io/OWNER/gitmirror:latest"
+    skip_push: auto   # not for prereleases
+    image_templates:
+      - "ghcr.io/OWNER/gitmirror:{{ .Version }}-amd64"
+      - "ghcr.io/OWNER/gitmirror:{{ .Version }}-arm64"
+
+release:
+  github:
+    owner: OWNER      # REPLACE: GitHub user or organisation
+    name: gitmirror
+  prerelease: auto

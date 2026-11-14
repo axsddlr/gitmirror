@@ -1,0 +1,63 @@
+# /etc/systemd/system/gitmirror.service
+#
+# Setup:
+#   install -m 0755 gitmirror /usr/local/bin/gitmirror
+#   useradd --system --home-dir /var/lib/gitmirror --shell /usr/sbin/nologin gitmirror
+#   install -d -m 0750 -o root -g gitmirror /etc/gitmirror
+#   install -m 0640 -o root -g gitmirror config.yaml /etc/gitmirror/config.yaml
+#   # token files (root-only; systemd hands them to the service, see LoadCredential below)
+#   install -d -m 0700 /etc/gitmirror/credentials
+#   printf '%s' "<token>" > /etc/gitmirror/credentials/github_token   # chmod 0600
+#   systemctl daemon-reload && systemctl enable --now gitmirror
+#
+# In /etc/gitmirror/config.yaml set:
+#   state_dir: /var/lib/gitmirror
+# and refer to the credentials. Expand ${CREDENTIALS_DIRECTORY} through the
+# environment interpolation, which is resolved when the config is loaded:
+#   forges:
+#     github: { type: github, token_file: "${CREDENTIALS_DIRECTORY}/github_token" }
+#   server:
+#     webhook_secret_file: "${CREDENTIALS_DIRECTORY}/webhook_secret"
+# (CREDENTIALS_DIRECTORY is set by systemd for services that use LoadCredential=.
+#  Commands run by hand, e.g. `gitmirror validate`, will not have it: export it
+#  yourself or use `systemd-run -p LoadCredential=... gitmirror validate`.)
+#
+# Use this service OR gitmirror-sync.timer, not both.
+
+[Unit]
+Description=gitmirror: one-way repository mirroring daemon
+Documentation=https://github.com/OWNER/gitmirror
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gitmirror
+Group=gitmirror
+ExecStart=/usr/local/bin/gitmirror serve -c /etc/gitmirror/config.yaml
+WorkingDirectory=/var/lib/gitmirror
+StateDirectory=gitmirror
+StateDirectoryMode=0750
+Environment=HOME=/var/lib/gitmirror
+LoadCredential=github_token:/etc/gitmirror/credentials/github_token
+LoadCredential=webhook_secret:/etc/gitmirror/credentials/webhook_secret
+Restart=on-failure
+RestartSec=10s
+# serve gives running syncs up to 10 minutes after SIGTERM; stay above that.
+TimeoutStopSec=11min
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadWritePaths=/var/lib/gitmirror
+
+[Install]
+WantedBy=multi-user.target
