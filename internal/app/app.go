@@ -104,7 +104,7 @@ func Build(ctx context.Context, cfg *config.Config, o Options) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
-	git := &gitx.Runner{Env: o.GitEnv}
+	git := &gitx.Runner{Env: o.GitEnv, UseHostConfig: cfg.Git.UseHostConfig}
 	v, err := git.Check(ctx)
 	if err != nil {
 		return nil, err

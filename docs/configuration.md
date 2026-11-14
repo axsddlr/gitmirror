@@ -26,6 +26,7 @@ Rules of the loader (`internal/config`):
 | `forges` | map name -> forge | none | names match `^[a-z0-9][a-z0-9_-]*$` | Forge connections referenced by rules. |
 | `defaults` | object | see below | see below | Settings every rule inherits. |
 | `server` | object | see below | see below | HTTP listener / webhook receiver for `serve`. |
+| `git` | object | see below | see below | How git and git-lfs are run. |
 | `rules` | list | none | at least one | One-way mirror rules. |
 
 ## `forges.<name>`
@@ -58,6 +59,12 @@ All keys can be overridden per rule.
 | `listen` | string | `:8080` | none (bind errors surface at start) | Listen address of `serve`. |
 | `webhook_secret` | string | none | Mutually exclusive with `webhook_secret_file` | Shared secret used to verify webhook signatures. If neither is set, `POST /webhook/<forge>` answers 404 and a warning is logged at start. |
 | `webhook_secret_file` | string | none | File must exist and be non-empty after trimming | File holding the secret. |
+
+## `git`
+
+| Key | Type | Default | Validation | Description |
+|---|---|---|---|---|
+| `use_host_config` | bool | `false` | none | When `false`, every git and git-lfs command runs with `GIT_CONFIG_NOSYSTEM=1` and `GIT_CONFIG_GLOBAL` pointing at an empty file, so the host's `/etc/gitconfig`, `~/.gitconfig` and XDG git config are ignored (a host `url.<x>.insteadOf` cannot redirect a remote, a global `http.extraHeader` is not sent to the forges, `core.hooksPath` / `credential.helper` cannot run code). With isolation on, configure proxies through the `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY` environment variables and a custom CA bundle through `GIT_SSL_CAINFO` (these are passed through). Set `true` to let git read the host configuration again, e.g. when it needs `http.sslBackend=schannel` on a Windows corporate setup. |
 
 ## `rules[]`
 
@@ -128,5 +135,7 @@ dropped pair as a deleted source.
 
 Git is run with a sanitised environment (`GIT_CONFIG*`, `GIT_DIR`, `GIT_ASKPASS`, tracing
 variables and similar are removed from the inherited environment, terminal prompts are
-disabled). Git still reads `$HOME/.gitconfig` and `/etc/gitconfig`; set `HOME` to a directory
-you control (the Docker image uses `/data`, the systemd unit `/var/lib/gitmirror`).
+disabled). By default git also ignores the system and global git configuration
+(`GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=<empty file>`, set after the stripping); see
+[`git.use_host_config`](#git). Variables git reads directly, such as `HTTPS_PROXY`, `HTTP_PROXY`,
+`NO_PROXY` and `GIT_SSL_CAINFO`, are passed through.

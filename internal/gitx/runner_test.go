@@ -23,9 +23,11 @@ func TestCheck(t *testing.T) {
 func TestCheckGitVersion(t *testing.T) {
 	for s, ok := range map[string]bool{
 		"2.47.1.windows.1": true,
-		"2.30.0":           true,
-		"2.30":             true,
+		"2.32.0":           true,
+		"2.32":             true,
 		"3.0.0":            true,
+		"2.31.8":           false, // no GIT_CONFIG_GLOBAL: host config isolation would silently not apply
+		"2.30.0":           false,
 		"2.29.9":           false,
 		"1.9.5":            false,
 		"garbage":          false,

@@ -94,7 +94,7 @@ func (c *cli) validate(ctx context.Context, offline bool) (int, error) {
 
 	opts := appOptions()
 	failed := false
-	v, err := (&gitx.Runner{Env: opts.GitEnv}).Check(ctx)
+	v, err := (&gitx.Runner{Env: opts.GitEnv, UseHostConfig: cfg.Git.UseHostConfig}).Check(ctx)
 	if err != nil {
 		doc.GitError = err.Error()
 		say("git: %v", err)

@@ -1,6 +1,7 @@
 // Package state persists gitmirror's durable safety state in SQLite:
 // destination ownership, per-pair last-known digests, run history, the
-// release id mapping and when a pair's source was first seen missing.
+// release id mapping, when a pair's source was first seen missing and an
+// append-only audit log of destination create/adopt/archive/delete actions.
 //
 // Times are stored as int64 unix nanoseconds (UTC); 0 means "unset" and is
 // returned as the zero time.Time. Nanosecond storage round-trips exactly.
@@ -574,7 +575,8 @@ func (s *Store) MissingSince(ctx context.Context, k PairKey) (time.Time, bool, e
 
 // DeletePair forgets a pair entirely in one transaction: its pair row, run
 // history, release and asset id mappings and missing record. Destination ownership is
-// not touched (see ReleaseOwnership). No error if the pair is unknown.
+// not touched (see ReleaseOwnership), and neither is the audit log, which
+// keeps the pair's events. No error if the pair is unknown.
 func (s *Store) DeletePair(ctx context.Context, k PairKey) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {

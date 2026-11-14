@@ -249,6 +249,7 @@ func (r *pairRun) prepare(ctx context.Context) bool {
 		if err := r.e.Store.MarkOwned(context.WithoutCancel(ctx), p.DstForge, p.DstFullName(), state.OwnedCreated); err != nil {
 			return fail(fmt.Errorf("record ownership of %s: %w", r.dstName(), err))
 		}
+		r.e.audit(ctx, r.log, r.key, state.AuditCreate, fmt.Sprintf("created %s repository (trigger %s)", vis, r.opt.trigger()))
 		r.dst, r.dstExists = created, true
 		detail = "destination created"
 	case err != nil:
@@ -268,6 +269,7 @@ func (r *pairRun) prepare(ctx context.Context) bool {
 				if err := r.e.Store.MarkOwned(context.WithoutCancel(ctx), p.DstForge, p.DstFullName(), state.OwnedAdopted); err != nil {
 					return fail(fmt.Errorf("record ownership of %s: %w", r.dstName(), err))
 				}
+				r.e.audit(ctx, r.log, r.key, state.AuditAdopt, fmt.Sprintf("adopted existing repository (trigger %s)", r.opt.trigger()))
 			}
 			detail = "destination adopted"
 		} else {
@@ -633,5 +635,10 @@ func (r *pairRun) finalize(ctx context.Context) {
 		return
 	}
 	r.dst.Archived = true
+	if verb == "archive" {
+		// Re-archiving a destination unarchived only for this sync restores
+		// its state and is not audited.
+		r.e.audit(ctx, r.log, r.key, state.AuditArchive, fmt.Sprintf("source archived (trigger %s)", r.opt.trigger()))
+	}
 	r.record(StepFinalize, start, state.StepOK, verb+"d destination")
 }

@@ -43,6 +43,11 @@ destroy data.
   templated destinations.
 * **Dry run.** `gitmirror plan` (and `sync --dry-run`) show exactly what would change and write
   nothing, neither to the forges nor to the state store.
+* **Audit log.** Every destination gitmirror creates, adopts, archives or deletes is recorded in an
+  append-only audit log in the state database that outlives the pair (`gitmirror status --audit N`).
+* **Host git config ignored.** git runs without the host's `/etc/gitconfig` and `~/.gitconfig`, so a
+  `url.<x>.insteadOf`, `http.extraHeader` or hook setting there cannot redirect or alter mirroring
+  (opt out with `git: {use_host_config: true}`).
 * **State-dir lock.** Only one gitmirror process can use a state directory at a time (OS file lock).
 * **Secret redaction.** Tokens are never printed in logs, errors or config dumps; error messages from
   `${VAR}` interpolation name the variable, never its value. `token_file` / `webhook_secret_file` keep
@@ -160,7 +165,7 @@ Command-specific flags:
 | `sync` | `--dry-run`, `--lock-timeout <duration>`, `--repo OWNER/NAME` (repeatable; skips reconcile), `--rule NAME` (repeatable) |
 | `plan` | `--repo OWNER/NAME` (repeatable), `--rule NAME` (repeatable); read-only, does not take the state-dir lock |
 | `validate` | `--offline` (config and local tools only, no network) |
-| `status` | `--runs N` (also list the N most recent runs) |
+| `status` | `--runs N` (also list the N most recent runs), `--audit N` (also list the N most recent audit events: destination create, adopt, archive, delete) |
 | `serve` | `--lock-timeout <duration>`, `--shutdown-timeout <duration>` (default 10m: how long running syncs may finish after SIGINT/SIGTERM before they are aborted; exits 0) |
 | `version` | none |
 
@@ -272,9 +277,11 @@ Not yet confirmed: whether GitHub rejects a push that touches `.github/workflows
   the state directory. Use only one, or pass `--lock-timeout`.
 * **Permission denied on `/data` in Docker.** The container user is uid 10001; chown the bind mount or
   use a named volume.
-* **Git prompts or a user git config interfere.** gitmirror disables terminal prompts and ignores
-  `GIT_CONFIG*` variables, but git still reads `$HOME/.gitconfig` and `/etc/gitconfig`. Point `HOME` at a
-  clean directory.
+* **Git prompts or a user git config interfere.** gitmirror disables terminal prompts, ignores
+  `GIT_CONFIG*` variables and, by default, the host's `/etc/gitconfig` and `~/.gitconfig`.
+* **TLS or proxy errors that a plain `git clone` does not hit.** The host git config is ignored by
+  default: set `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY` and `GIT_SSL_CAINFO` in gitmirror's environment,
+  or set `git: {use_host_config: true}` if git needs host settings (e.g. `http.sslBackend=schannel` on Windows).
 
 ## Limitations and roadmap
 

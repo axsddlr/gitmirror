@@ -38,9 +38,21 @@ type jsonRun struct {
 	Error    string     `json:"error,omitempty"`
 }
 
+type jsonAuditEvent struct {
+	ID          int64     `json:"id"`
+	Time        time.Time `json:"time"`
+	Action      string    `json:"action"`
+	Rule        string    `json:"rule"`
+	Source      string    `json:"source"`
+	Destination string    `json:"destination"`
+	Detail      string    `json:"detail,omitempty"`
+}
+
 type jsonStatusDoc struct {
 	Pairs []jsonPairState `json:"pairs"`
 	Runs  []jsonRun       `json:"runs"`
+	// Audit is present only with --audit.
+	Audit []jsonAuditEvent `json:"audit,omitempty"`
 }
 
 func tptr(t time.Time) *time.Time {
@@ -51,7 +63,7 @@ func tptr(t time.Time) *time.Time {
 }
 
 func (c *cli) statusCmd() *cobra.Command {
-	var runs int
+	var runs, audit int
 	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "Show the last known state of every pair (no network)",
@@ -87,7 +99,20 @@ func (c *cli) statusCmd() *cobra.Command {
 					return &exitError{exitFailed, err}
 				}
 			}
+			var events []state.Event
+			if audit > 0 {
+				if events, err = st.AuditLog(cmd.Context(), audit); err != nil {
+					return &exitError{exitFailed, err}
+				}
+			}
 			if c.json {
+				for _, ev := range events {
+					doc.Audit = append(doc.Audit, jsonAuditEvent{
+						ID: ev.ID, Time: ev.Time, Action: string(ev.Action), Rule: ev.Key.Rule,
+						Source: ev.Key.SrcForge + ":" + ev.Key.SrcRepo, Destination: ev.Key.DstForge + ":" + ev.Key.DstRepo,
+						Detail: ev.Detail,
+					})
+				}
 				for _, p := range pairs {
 					doc.Pairs = append(doc.Pairs, jsonPairState{
 						Rule: p.Key.Rule, Source: p.Key.SrcForge + ":" + p.Key.SrcRepo,
@@ -129,9 +154,20 @@ func (c *cli) statusCmd() *cobra.Command {
 				}
 				tw.Flush()
 			}
+			if audit > 0 {
+				fmt.Fprintf(c.out, "\naudit log (%d):\n", len(events))
+				tw := tabwriter.NewWriter(c.out, 0, 4, 2, ' ', 0)
+				fmt.Fprintln(tw, "ID\tTIME\tACTION\tPAIR\tDETAIL")
+				for _, ev := range events {
+					fmt.Fprintf(tw, "%d\t%s\t%s\t%s: %s\t%s\n", ev.ID, ev.Time.Local().Format(timeFmt), ev.Action,
+						ev.Key.Rule, pairText(ev.Key), truncate(ev.Detail, 80))
+				}
+				tw.Flush()
+			}
 			return nil
 		},
 	}
 	cmd.Flags().IntVar(&runs, "runs", 0, "also list the N most recent runs")
+	cmd.Flags().IntVar(&audit, "audit", 0, "also list the N most recent audit events (destination create, adopt, archive, delete)")
 	return cmd
 }

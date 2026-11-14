@@ -76,6 +76,17 @@ server:
   # webhook_secret_file: /run/secrets/webhook_secret
 
 # --------------------------------------------------------------------------
+# How git and git-lfs are run.
+# --------------------------------------------------------------------------
+git:
+  # false (default): git ignores the host's /etc/gitconfig and ~/.gitconfig, so
+  # url.<x>.insteadOf, http.extraHeader, hooks or credential helpers configured
+  # there cannot affect mirroring. Proxies then come from HTTPS_PROXY /
+  # HTTP_PROXY / NO_PROXY and a custom CA bundle from GIT_SSL_CAINFO.
+  # true: git reads the host configuration (e.g. http.sslBackend=schannel).
+  use_host_config: false
+
+# --------------------------------------------------------------------------
 # Rules: each rule is ONE-WAY, from.forge -> to.forge. At least one is required.
 # `name` is unique and matches ^[a-z0-9][a-z0-9_-]*$.
 # `from` takes exactly one of owner / starred_by / repo.

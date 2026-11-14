@@ -13,8 +13,8 @@ independent rules in opposite directions on different repositories.
 | `internal/app` | Composition root. Builds providers (each wrapped in the retrying HTTP client), opens the state store, takes the OS-level state-dir lock, creates the engine; implements the shared `Sync` workflow (resolve, sync, reconcile). |
 | `internal/resolve` | Expands rules into concrete source-to-destination **pairs** by listing the source (owner / starred / single repo), applying filters, rendering destination names, then runtime safety checks (self-mirror, duplicate destination, mirror loop). Reports whether each rule's listing was complete. |
 | `internal/engine` | The per-pair pipeline (below), release mirroring, and reconcile (source-deletion policy). Holds the data-loss safeguards. |
-| `internal/gitx` | Runs `git` / `git-lfs`: sanitised environment, per-remote credentials via origin-scoped `http.extraHeader`, persistent bare cache per pair, mirror fetch/push with prune, LFS, `ls-remote`, cache lock. |
-| `internal/state` | sqlite store (pure-Go `modernc.org/sqlite`, embedded migrations): destination ownership, per-pair state (last ref count and digest, consecutive failures, missing-since), run history, release id mapping. |
+| `internal/gitx` | Runs `git` / `git-lfs`: sanitised environment isolated from the host's system/global git config (unless `git.use_host_config`), per-remote credentials via origin-scoped `http.extraHeader`, persistent bare cache per pair, mirror fetch/push with prune, LFS, `ls-remote`, cache lock. |
+| `internal/state` | sqlite store (pure-Go `modernc.org/sqlite`, embedded migrations): destination ownership, per-pair state (last ref count and digest, consecutive failures, missing-since), run history, release id mapping, append-only audit log of destination create/adopt/archive/delete (kept when a pair is forgotten). |
 | `internal/forge` | Provider interfaces and registry (`forge.Register`, `forge.New`). |
 | `internal/forge/github`, `internal/forge/gitea` | Providers. `gitea` also serves Forgejo. |
 | `internal/forge/httpx` | HTTP transport with retries and rate-limit waits that never repeats a non-idempotent write. |
@@ -85,12 +85,15 @@ and print the actions that would be taken.
 | Never write to a destination gitmirror did not create unless `adopt: true` | `engine.prepare`, `state.Owned` |
 | Empty-source guard before pruning | `engine.syncGit`, `gitx.ErrEmptySource` |
 | `deletion_grace` before applying `on_source_deleted` (only a positive "not found" counts; any other error leaves the pair alone; the clock restarts when the source reappears) | `engine/reconcile.go`, `state.MarkMissing` |
+| After the grace, a no-op outcome (destination not owned or already gone) is recorded as a run once per missing period, not every cycle | `engine/reconcile.go`, `state.SetMissingReported` |
+| Durable audit record of every destination create, adopt, archive and delete (real runs only); `DeletePair` does not remove it; shown by `status --audit N` | `engine/audit.go`, `state.Audit` / `state.AuditLog` |
 | Repo deletion only for destinations gitmirror created, and only when the rule opts in with `on_source_deleted: delete`; otherwise archive | `engine/reconcile.go` |
 | Pairs dropped by safety checks are not treated as deleted | `resolve.Result.Dropped`, `engine.Reconcile` |
 | Visibility never widens | `engine.prepare` / `syncSettings` |
 | Self-mirror / duplicate destination / loop checks (static for literal rules, at runtime for templates) | `config/validate.go`, `resolve.safety` |
 | One gitmirror process per state dir | `app/lock*.go` |
 | Credentials are passed to git only through the child environment (origin-scoped `http.extraHeader`), never argv or config files; the inherited git environment is sanitised | `gitx/env.go`, `config` redaction |
+| git ignores the host's `/etc/gitconfig` and `~/.gitconfig` (`GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=<empty file>`, set after the `GIT_CONFIG*` stripping) unless `git.use_host_config: true` | `gitx/env.go` (`isolationEnv`), `gitx.Runner.UseHostConfig` |
 | Webhook signature verified (HMAC-SHA256), unknown forges and bodies over 25 MiB rejected | `server/webhook.go`, providers' `ParseWebhook` |
 
 ## Daemon (`internal/server`)

@@ -63,6 +63,8 @@ type Config struct {
 	Defaults Defaults `yaml:"defaults"`
 	// Server configures the HTTP listener / webhook receiver.
 	Server Server `yaml:"server"`
+	// Git configures how git child processes are run.
+	Git Git `yaml:"git"`
 	// Rules are the one-way mirror rules. At least one is required.
 	Rules []Rule `yaml:"rules"`
 }
@@ -120,6 +122,17 @@ type Defaults struct {
 	DeletionGrace string `yaml:"deletion_grace"`
 	// DeleteMissingReleases removes destination releases that no longer exist at the source.
 	DeleteMissingReleases bool `yaml:"delete_missing_releases"`
+}
+
+// Git configures how gitmirror runs git and git-lfs.
+type Git struct {
+	// UseHostConfig lets git read the host's system and global git
+	// configuration (/etc/gitconfig, ~/.gitconfig, XDG config). Default
+	// false: git runs isolated from them, so host settings such as
+	// url.<x>.insteadOf, http.extraHeader or core.hooksPath cannot redirect
+	// or alter mirroring. Proxies then come from HTTPS_PROXY / HTTP_PROXY /
+	// NO_PROXY and a custom CA bundle from GIT_SSL_CAINFO.
+	UseHostConfig bool `yaml:"use_host_config"`
 }
 
 // Server configures the webhook/HTTP server.

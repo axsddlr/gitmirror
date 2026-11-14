@@ -44,8 +44,11 @@ const DefaultDeletionGrace = 24 * time.Hour
 // destinations). A deleted pair is removed from the state store. Applying a
 // policy is recorded as one run with trigger "<trigger>:reconcile"; "keep"
 // and an already archived destination record nothing, and an already
-// archived destination produces no Report. A dry run writes nothing to any
-// forge or to the state store.
+// archived destination produces no Report. An outcome that changes nothing
+// (destination not owned, or already gone) is recorded as a run once per
+// missing period; later cycles produce no Report and no run. A real archive
+// or delete is also appended to the store's audit log, which survives the
+// pair's removal. A dry run writes nothing to any forge or to the state store.
 func (e *Engine) Reconcile(ctx context.Context, current []resolve.Pair, complete map[string]bool, dropped []resolve.Pair, settings map[string]config.RuleSettings, opt Options) []Report {
 	log := e.logger()
 	states, err := e.Store.Pairs(ctx)
@@ -166,6 +169,19 @@ func (e *Engine) reconcileOne(ctx context.Context, k state.PairKey, rs config.Ru
 		case planArchived:
 			log.Debug("engine: reconcile: destination already archived")
 			return rep, false
+		case planNotOwned, planGone:
+			// These change nothing; record them once per missing period
+			// (the flag lives on the missing record, which ClearMissing
+			// resets), not on every reconcile cycle.
+			reported, err := e.Store.MissingReported(ctx, k)
+			if err != nil {
+				rep.Status, rep.Err = state.RunFailed, fmt.Errorf("engine: read missing record: %w", err)
+				return rep, true
+			}
+			if reported {
+				log.Debug("engine: reconcile: outcome already recorded; nothing to do", "outcome", plan.kind.String())
+				return rep, false
+			}
 		}
 	}
 
@@ -204,6 +220,11 @@ func (e *Engine) reconcileOne(ctx context.Context, k state.PairKey, rs config.Ru
 		if ferr := e.Store.FinishRun(context.WithoutCancel(ctx), rep.RunID, rep.Status, rep.Steps, msg, "", 0); ferr != nil {
 			log.Error("engine: finish run", "err", ferr)
 		}
+		if rep.Err == nil && (plan.kind == planNotOwned || plan.kind == planGone) {
+			if serr := e.Store.SetMissingReported(context.WithoutCancel(ctx), k); serr != nil {
+				log.Error("engine: flag reconcile outcome as recorded", "err", serr)
+			}
+		}
 		if deleted {
 			// The destination is gone: forget the pair so it never
 			// reappears in later cycles.
@@ -236,6 +257,24 @@ const (
 	planArchive                  // archive the destination
 	planDelete                   // delete the destination
 )
+
+func (k planKind) String() string {
+	switch k {
+	case planKeep:
+		return "keep"
+	case planNotOwned:
+		return "destination not owned"
+	case planGone:
+		return "destination already gone"
+	case planArchived:
+		return "destination already archived"
+	case planArchive:
+		return "archive"
+	case planDelete:
+		return "delete"
+	}
+	return fmt.Sprintf("plan(%d)", int(k))
+}
 
 // deletionPlan is what applying OnSourceDeleted to a pair would do.
 type deletionPlan struct {
@@ -334,6 +373,7 @@ func (e *Engine) applyDeletionPlan(ctx context.Context, k state.PairKey, plan de
 		if err := plan.dstP.UpdateRepoSettings(ctx, owner, name, forge.Settings{Archived: &t}); err != nil {
 			return "", "", fmt.Errorf("archive %s: %w", dst, err)
 		}
+		e.audit(ctx, e.logger().With("pair", k.String()), k, state.AuditArchive, withNote("source deleted; destination archived"))
 		return state.StepOK, withNote("destination archived"), nil
 	case planDelete:
 		act("source deleted; delete destination %s", dst)
@@ -343,6 +383,7 @@ func (e *Engine) applyDeletionPlan(ctx context.Context, k state.PairKey, plan de
 		if err := plan.del.DeleteRepo(ctx, owner, name); err != nil && !errors.Is(err, forge.ErrNotFound) {
 			return "", "", fmt.Errorf("delete %s: %w", dst, err)
 		}
+		e.audit(ctx, e.logger().With("pair", k.String()), k, state.AuditDelete, "source deleted; destination deleted")
 		if err := e.Store.ReleaseOwnership(context.WithoutCancel(ctx), k.DstForge, k.DstRepo); err != nil {
 			return "", "", fmt.Errorf("release ownership of %s: %w", dst, err)
 		}

@@ -2,8 +2,11 @@ package gitx
 
 import (
 	"errors"
+	"fmt"
+	"os"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // strippedEnvPrefixes / strippedEnvKeys are removed from the inherited host
@@ -51,8 +54,55 @@ func stripped(kv string) bool {
 	return false
 }
 
+// isolationEnv returns the variables that keep git (and git-lfs, which reads
+// its configuration through git) away from the host's system and global git
+// configuration: GIT_CONFIG_NOSYSTEM=1 and GIT_CONFIG_GLOBAL pointing at an
+// empty file. Without them a host url.<x>.insteadOf could redirect a remote,
+// a global http.extraHeader would be sent to every forge, and
+// core.hooksPath, credential.helper or core.sshCommand could run code.
+// Proxies (HTTPS_PROXY, HTTP_PROXY, NO_PROXY) and a custom CA bundle
+// (GIT_SSL_CAINFO) are plain environment variables and keep working.
+func isolationEnv() ([]string, error) {
+	p, err := emptyConfigFile()
+	if err != nil {
+		return nil, err
+	}
+	return []string{"GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=" + p}, nil
+}
+
+var emptyConfig struct {
+	mu   sync.Mutex
+	path string
+}
+
+// emptyConfigFile returns the path of an empty, process-private file used as
+// git's global config. It is created once (os.CreateTemp: random name,
+// exclusive create, mode 0600) and re-created if it disappears or is no
+// longer an empty regular file, e.g. after a temp directory cleanup.
+func emptyConfigFile() (string, error) {
+	emptyConfig.mu.Lock()
+	defer emptyConfig.mu.Unlock()
+	if p := emptyConfig.path; p != "" {
+		if fi, err := os.Lstat(p); err == nil && fi.Mode().IsRegular() && fi.Size() == 0 {
+			return p, nil
+		}
+	}
+	f, err := os.CreateTemp("", "gitmirror-empty-*.gitconfig")
+	if err != nil {
+		return "", fmt.Errorf("gitx: create empty git config: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return "", fmt.Errorf("gitx: create empty git config: %w", err)
+	}
+	emptyConfig.path = f.Name()
+	return emptyConfig.path, nil
+}
+
 // buildEnv returns the child environment: base minus dangerous variables,
-// then extra (Runner.Env), then the safety variables and one origin-scoped
+// then extra (Runner.Env followed by isolationEnv, unless the host config is
+// used: appended after the stripping of every GIT_CONFIG* variable so it
+// survives, and after Runner.Env so that cannot undo it), then the safety
+// variables and one origin-scoped
 // http.<origin>.extraHeader per authenticated http(s) remote, injected via
 // GIT_CONFIG_COUNT/KEY/VALUE. Two remotes sharing an origin with different
 // credentials are refused: callers must give each command only the

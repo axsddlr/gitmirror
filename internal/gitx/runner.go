@@ -18,7 +18,7 @@ const (
 	defaultTimeout = 30 * time.Minute
 	maxStderr      = 64 << 10
 	minGitMajor    = 2
-	minGitMinor    = 30
+	minGitMinor    = 32 // GIT_CONFIG_GLOBAL (host config isolation) needs git 2.32
 )
 
 // Runner executes git commands with a hardened environment.
@@ -29,8 +29,14 @@ type Runner struct {
 	// Timeout bounds each individual git command; default 30 minutes.
 	Timeout time.Duration
 	// Env is appended to the sanitized child environment (mainly for tests,
-	// e.g. HOME or GIT_CONFIG_NOSYSTEM). Safety variables still win.
+	// e.g. HOME). Safety variables and, unless UseHostConfig, the config
+	// isolation variables (GIT_CONFIG_NOSYSTEM, GIT_CONFIG_GLOBAL) still win.
 	Env []string
+	// UseHostConfig lets git read the host's system and global git config.
+	// By default (false) every git and git-lfs command runs with
+	// GIT_CONFIG_NOSYSTEM=1 and GIT_CONFIG_GLOBAL set to an empty file, so
+	// host settings such as url.<x>.insteadOf or http.extraHeader are ignored.
+	UseHostConfig bool
 
 	// hook, if set, observes every command just before it starts (tests).
 	hook func(*exec.Cmd)
@@ -130,7 +136,11 @@ func (b *boundedBuffer) String() string {
 // still returned. Callers must scrub any stdout-derived text before it leaves
 // the package in an error or log line.
 func (r *Runner) run(ctx context.Context, s spec) (string, error) {
-	env, err := buildEnv(os.Environ(), r.envExtra(), s.auth...)
+	extra, err := r.envExtra()
+	if err != nil {
+		return "", err
+	}
+	env, err := buildEnv(os.Environ(), extra, s.auth...)
 	if err != nil {
 		return "", err
 	}
@@ -174,11 +184,22 @@ func (r *Runner) run(ctx context.Context, s spec) (string, error) {
 	return out, nil
 }
 
-func (r *Runner) envExtra() []string {
-	if r == nil {
-		return nil
+// envExtra returns Runner.Env followed, unless UseHostConfig, by the
+// variables isolating git from the host's system and global configuration.
+// They come after Runner.Env so it cannot undo the isolation.
+func (r *Runner) envExtra() ([]string, error) {
+	var env []string
+	if r != nil {
+		env = append(env, r.Env...)
+		if r.UseHostConfig {
+			return env, nil
+		}
 	}
-	return r.Env
+	iso, err := isolationEnv()
+	if err != nil {
+		return nil, err
+	}
+	return append(env, iso...), nil
 }
 
 func opName(args []string) string {
@@ -191,7 +212,7 @@ func opName(args []string) string {
 	return args[0]
 }
 
-// Check verifies git is usable and at least version 2.30, and reports the
+// Check verifies git is usable and at least version 2.32, and reports the
 // git-lfs version ("" if git-lfs is not installed).
 func (r *Runner) Check(ctx context.Context) (Versions, error) {
 	var v Versions
