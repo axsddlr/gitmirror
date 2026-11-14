@@ -107,8 +107,9 @@ func ForgeURL(f config.Forge) string {
 	}
 	u.Scheme = strings.ToLower(u.Scheme)
 	host, port := strings.ToLower(u.Hostname()), u.Port()
+	defaultPort := u.Scheme == "https" && port == "443" || u.Scheme == "http" && port == "80"
 	switch {
-	case port != "" && !(u.Scheme == "https" && port == "443" || u.Scheme == "http" && port == "80"):
+	case port != "" && !defaultPort:
 		u.Host = net.JoinHostPort(host, port)
 	case strings.Contains(host, ":"):
 		u.Host = "[" + host + "]" // IPv6 literal
@@ -166,14 +167,14 @@ func Build(ctx context.Context, cfg *config.Config, o Options) (*App, error) {
 	}
 	st, err := state.Open(ctx, filepath.Join(cfg.StateDir, "state.db"))
 	if err != nil {
-		lk.release()
+		_ = lk.release() // best effort: the error above is what gets reported
 		return nil, err
 	}
 	if !o.ReadOnly {
 		n, err := st.AbandonRunning(ctx)
 		if err != nil {
 			st.Close()
-			lk.release()
+			_ = lk.release() // best effort: the error above is what gets reported
 			return nil, fmt.Errorf("abandon interrupted runs: %w", err)
 		}
 		if n > 0 {

@@ -34,7 +34,7 @@ func (rc *recorder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	rc.mu.Unlock()
 	if rc.next == nil {
-		io.Copy(io.Discard, r.Body)
+		_, _ = io.Copy(io.Discard, r.Body)
 		http.NotFound(w, r)
 		return
 	}
@@ -67,7 +67,7 @@ func TestHTTPRedirectToOtherHostNotFollowed(t *testing.T) {
 	target := &recorder{next: gitBackend(t, f.root)}
 	targetURL := startServer(t, target)
 	origin := startServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		io.Copy(io.Discard, r.Body)
+		_, _ = io.Copy(io.Discard, r.Body)
 		http.Redirect(w, r, targetURL+r.URL.RequestURI(), http.StatusFound)
 	}))
 	src := Remote{URL: origin + "/src.git", Token: tok}
@@ -121,7 +121,7 @@ func TestLFSBatchRedirectToOtherHostDropsToken(t *testing.T) {
 			mu.Lock()
 			lfsHits++
 			mu.Unlock()
-			io.Copy(io.Discard, r.Body)
+			_, _ = io.Copy(io.Discard, r.Body)
 			http.Redirect(w, r, targetURL+r.URL.RequestURI(), http.StatusTemporaryRedirect)
 			return
 		}

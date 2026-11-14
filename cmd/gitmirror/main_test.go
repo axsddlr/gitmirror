@@ -438,7 +438,9 @@ func TestTokenNeverPrinted(t *testing.T) {
 	e := newTestEnv(t)
 	e.addSource("alice", "a")
 	rel, _ := e.src.CreateRelease(context.Background(), "alice", "a", forge.Release{Tag: "v1"})
-	e.src.UploadAsset(context.Background(), "alice", "a", rel.ID, forge.Asset{Name: "x.bin"}, strings.NewReader("d"))
+	if _, err := e.src.UploadAsset(context.Background(), "alice", "a", rel.ID, forge.Asset{Name: "x.bin"}, strings.NewReader("d")); err != nil {
+		t.Fatal(err)
+	}
 	e.dst.FailNext("UploadAsset", errors.New("boom"))
 
 	variants := [][]string{

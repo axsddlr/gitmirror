@@ -53,7 +53,9 @@ func TestOpenCreatesAndReopens(t *testing.T) {
 		t.Fatal(err)
 	}
 	var n1 int
-	s.db.QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&n1)
+	if err := s.db.QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&n1); err != nil {
+		t.Fatal(err)
+	}
 	s.Close()
 	s, err = Open(ctx, p)
 	if err != nil {
@@ -61,7 +63,9 @@ func TestOpenCreatesAndReopens(t *testing.T) {
 	}
 	defer s.Close()
 	var n2 int
-	s.db.QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&n2)
+	if err := s.db.QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&n2); err != nil {
+		t.Fatal(err)
+	}
 	if n1 == 0 || n1 != n2 {
 		t.Fatalf("migrations count %d -> %d", n1, n2)
 	}
@@ -277,9 +281,13 @@ func TestRecentRuns(t *testing.T) {
 func TestAbandonRunning(t *testing.T) {
 	s := openTemp(t)
 	a, _ := s.StartRun(ctx, key("a"), "m")
-	s.StartRun(ctx, key("b"), "m")
+	if _, err := s.StartRun(ctx, key("b"), "m"); err != nil {
+		t.Fatal(err)
+	}
 	done, _ := s.StartRun(ctx, key("c"), "m")
-	s.FinishRun(ctx, done, RunOK, nil, "", "d", 1)
+	if err := s.FinishRun(ctx, done, RunOK, nil, "", "d", 1); err != nil {
+		t.Fatal(err)
+	}
 	n, err := s.AbandonRunning(ctx)
 	if err != nil || n != 2 {
 		t.Fatalf("n=%d err=%v", n, err)
@@ -318,7 +326,9 @@ func TestPruneRuns(t *testing.T) {
 func TestPairsSorted(t *testing.T) {
 	s := openTemp(t)
 	for _, n := range []string{"c", "a", "b"} {
-		s.StartRun(ctx, key(n), "m")
+		if _, err := s.StartRun(ctx, key(n), "m"); err != nil {
+			t.Fatal(err)
+		}
 	}
 	ps, err := s.Pairs(ctx)
 	if err != nil || len(ps) != 3 {
@@ -338,10 +348,18 @@ func TestReleaseMap(t *testing.T) {
 	if err != nil || len(m) != 0 || m == nil {
 		t.Fatalf("%v %v", m, err)
 	}
-	s.SetReleaseMapping(ctx, k, 1, 10)
-	s.SetReleaseMapping(ctx, k, 2, 20)
-	s.SetReleaseMapping(ctx, k, 1, 11)
-	s.SetReleaseMapping(ctx, key("b"), 1, 99)
+	if err := s.SetReleaseMapping(ctx, k, 1, 10); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetReleaseMapping(ctx, k, 2, 20); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetReleaseMapping(ctx, k, 1, 11); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetReleaseMapping(ctx, key("b"), 1, 99); err != nil {
+		t.Fatal(err)
+	}
 	m, _ = s.ReleaseMap(ctx, k)
 	if !reflect.DeepEqual(m, map[int64]int64{1: 11, 2: 20}) {
 		t.Fatalf("%v", m)
@@ -396,7 +414,9 @@ func TestFixedClockExact(t *testing.T) {
 	want := time.Date(2030, 5, 6, 7, 8, 9, 987654321, time.FixedZone("x", 3600))
 	s.SetClock(func() time.Time { return want })
 	id, _ := s.StartRun(ctx, key("a"), "m")
-	s.FinishRun(ctx, id, RunOK, nil, "", "d", 1)
+	if err := s.FinishRun(ctx, id, RunOK, nil, "", "d", 1); err != nil {
+		t.Fatal(err)
+	}
 	ps, _, _ := s.Pair(ctx, key("a"))
 	if !ps.LastSuccess.Equal(want) || !ps.LastAttempt.Equal(want) {
 		t.Fatalf("%v %v", ps.LastSuccess, ps.LastAttempt)

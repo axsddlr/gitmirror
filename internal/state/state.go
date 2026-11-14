@@ -14,6 +14,7 @@ package state
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -245,7 +246,11 @@ func (s *Store) migrate(ctx context.Context) error {
 	committed := false
 	defer func() {
 		if !committed {
-			conn.ExecContext(context.WithoutCancel(ctx), `ROLLBACK`)
+			if _, err := conn.ExecContext(context.WithoutCancel(ctx), `ROLLBACK`); err != nil {
+				// Never hand a connection with an open transaction back to
+				// the pool: returning ErrBadConn from Raw discards it.
+				_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+			}
 		}
 	}()
 	if _, err := conn.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -426,7 +431,7 @@ func (s *Store) StartRun(ctx context.Context, k PairKey, trigger string) (int64,
 	if err != nil {
 		return 0, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }() // no-op (ErrTxDone) after Commit
 	now := toNanos(s.now().UTC())
 	if _, err := tx.ExecContext(ctx, `INSERT INTO pairs(key, rule, src_forge, src_repo, dst_forge, dst_repo, last_attempt)
 		VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -463,7 +468,7 @@ func (s *Store) FinishRun(ctx context.Context, id int64, status RunStatus, steps
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }() // no-op (ErrTxDone) after Commit
 	now := toNanos(s.now().UTC())
 	res, err := tx.ExecContext(ctx, `UPDATE runs SET finished = ?, status = ?, steps = ?, error = ?
 		WHERE id = ? AND status = ?`, now, string(status), string(sj), errMsg, id, string(RunRunning))
@@ -684,7 +689,7 @@ func (s *Store) MarkMissingObserved(ctx context.Context, k PairKey, maxGap time.
 	if err != nil {
 		return time.Time{}, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }() // no-op (ErrTxDone) after Commit
 	now := s.now().UTC()
 	var first, last int64
 	err = tx.QueryRowContext(ctx, `SELECT first_seen, last_seen FROM missing WHERE pair_key = ?`, k.String()).Scan(&first, &last)
@@ -757,7 +762,7 @@ func (s *Store) DeletePair(ctx context.Context, k PairKey) error {
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }() // no-op (ErrTxDone) after Commit
 	ks := k.String()
 	for _, q := range []string{
 		`DELETE FROM runs WHERE pair_key = ?`,

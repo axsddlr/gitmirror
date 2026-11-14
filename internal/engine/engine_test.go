@@ -238,7 +238,7 @@ func TestArchivedDestinationUnarchivedForPushAndRestored(t *testing.T) {
 	if len(w) != 2 || w[0] != "UpdateRepoSettings" || w[1] != "UpdateRepoSettings" {
 		t.Fatalf("dst writes = %v, want unarchive + re-archive", w)
 	}
-	if !(indexOf(calls, "UpdateRepoSettings") < indexOf(calls, "GitURL")) {
+	if indexOf(calls, "UpdateRepoSettings") >= indexOf(calls, "GitURL") {
 		t.Fatalf("unarchive did not happen before the push: %v", calls)
 	}
 	wantAction(t, r, "unarchive")

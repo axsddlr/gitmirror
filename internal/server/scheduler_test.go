@@ -122,9 +122,9 @@ func TestScheduledLaneRerunsRunningRuleOnce(t *testing.T) {
 		t.Fatalf("queue while running = %v, want [r1]", got)
 	}
 	f.src.open()
-	jobs := f.waitJobs(2)
+	f.waitJobs(2)
 	waitFor(t, 10*time.Second, func() bool { return len(s.queuedRules()) == 0 && !s.busy(laneScheduled) }, "lane idle")
-	jobs = f.doneJobs()
+	jobs := f.doneJobs()
 	if len(jobs) != 2 || countRule(jobs, laneScheduled, "r1") != 2 {
 		t.Fatalf("jobs = %+v, want r1 exactly twice", jobs)
 	}

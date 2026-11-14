@@ -1,0 +1,15 @@
+version: "2"
+
+linters:
+  # The default set: errcheck, govet, ineffassign, staticcheck, unused.
+  default: standard
+  exclusions:
+    # Unchecked errors from Close, Flush, fmt.Fprint*, os.Remove(All) and
+    # os.(Un)Setenv are accepted; every other unchecked error is reported.
+    presets:
+      - std-error-handling
+
+issues:
+  # Report every finding, not just the first 50 per linter.
+  max-issues-per-linter: 0
+  max-same-issues: 0

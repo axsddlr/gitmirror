@@ -321,7 +321,8 @@ func (f *fixture) start(s *Server) *running {
 		cancel()
 		f.src.open()
 		select {
-		case <-r.done:
+		case err := <-r.done:
+			_ = err // shutdown error is not under test here
 		case <-time.After(60 * time.Second):
 			f.t.Error("Run did not return")
 		}

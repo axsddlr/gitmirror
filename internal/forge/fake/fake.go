@@ -885,7 +885,7 @@ func Sign(secret string, body []byte) string {
 // ParseWebhook implements forge.WebhookProvider.
 func (p *Provider) ParseWebhook(r *http.Request, secret string) (*forge.Event, error) {
 	p.mu.Lock()
-	err := p.begin(nil, "ParseWebhook")
+	err := p.begin(context.Background(), "ParseWebhook")
 	p.mu.Unlock()
 	if err != nil {
 		return nil, err

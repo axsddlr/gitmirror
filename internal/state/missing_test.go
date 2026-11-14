@@ -118,7 +118,9 @@ func TestMigrationFromV1(t *testing.T) {
 		t.Fatalf("SetAssetMapping on upgraded db: %v", err)
 	}
 	var n1 int
-	s.db.QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&n1)
+	if err := s.db.QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&n1); err != nil {
+		t.Fatal(err)
+	}
 	s.Close()
 
 	// Reopening is a no-op.
@@ -128,7 +130,9 @@ func TestMigrationFromV1(t *testing.T) {
 	}
 	defer s.Close()
 	var n2 int
-	s.db.QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&n2)
+	if err := s.db.QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&n2); err != nil {
+		t.Fatal(err)
+	}
 	if n1 != latest || n2 != latest || schemaVersion(t, s) != latest {
 		t.Fatalf("migrations rows %d -> %d, version %d", n1, n2, schemaVersion(t, s))
 	}
@@ -173,7 +177,9 @@ func TestDeletePairCascade(t *testing.T) {
 		t.Fatalf("runs survived DeletePair: %+v", runs)
 	}
 	var n int
-	s.db.QueryRow(`SELECT count(*) FROM runs WHERE pair_key = ?`, k.String()).Scan(&n)
+	if err := s.db.QueryRow(`SELECT count(*) FROM runs WHERE pair_key = ?`, k.String()).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
 	if n != 0 {
 		t.Fatalf("%d orphan run rows", n)
 	}

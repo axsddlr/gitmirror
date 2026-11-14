@@ -569,7 +569,7 @@ rules:
 		"%#v forge":    fmt.Sprintf("%#v", c.Forges["gh"]),
 		"%v forge":     fmt.Sprintf("%v", c.Forges["gh"]),
 		"%+v forge":    fmt.Sprintf("%+v", c.Forges["gh"]),
-		"%s forge":     fmt.Sprintf("%s", c.Forges["home"]),
+		"%s forge":     c.Forges["home"].String(),
 		"%v *forge":    fmt.Sprintf("%v", func() *Forge { f := c.Forges["gh"]; return &f }()),
 		"%+v server":   fmt.Sprintf("%+v", c.Server),
 		"redacted":     fmt.Sprintf("%+v", c.Redacted()),

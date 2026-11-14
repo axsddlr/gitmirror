@@ -270,8 +270,12 @@ func TestSyncCorruptCacheSelfHeals(t *testing.T) {
 		if err := os.MkdirAll(f.cache, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		os.WriteFile(filepath.Join(f.cache, "HEAD"), []byte("garbage\n"), 0o644)
-		os.WriteFile(filepath.Join(f.cache, "junk.txt"), []byte("junk"), 0o644)
+		if err := os.WriteFile(filepath.Join(f.cache, "HEAD"), []byte("garbage\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(f.cache, "junk.txt"), []byte("junk"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 
 		f.sync(SyncOptions{})
 		equalMaps(t, "dst refs", refsOf(t, f.env, f.dst), refsOf(t, f.env, f.src))

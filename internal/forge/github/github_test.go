@@ -351,7 +351,7 @@ func (f *fakeAPI) pagedRepos(pattern, prefix string, wantQuery map[string]string
 			f.t.Errorf("per_page = %q", q.Get("per_page"))
 		}
 		page := 1
-		fmt.Sscan(q.Get("page"), &page)
+		_, _ = fmt.Sscan(q.Get("page"), &page)
 		if page < len(pages) {
 			next := *r.URL
 			nq := next.Query()
@@ -502,8 +502,12 @@ func TestUpdateSettingsUnarchiveFirst(t *testing.T) {
 		t.Fatalf("order = %s", got)
 	}
 	var first, second map[string]any
-	json.Unmarshal([]byte(strings.TrimPrefix(bodies[0], "PATCH ")), &first)
-	json.Unmarshal([]byte(strings.TrimPrefix(bodies[1], "PATCH ")), &second)
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(bodies[0], "PATCH ")), &first); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(bodies[1], "PATCH ")), &second); err != nil {
+		t.Fatal(err)
+	}
 	if len(first) != 1 || first["archived"] != false {
 		t.Errorf("first patch = %v", first)
 	}
@@ -512,7 +516,9 @@ func TestUpdateSettingsUnarchiveFirst(t *testing.T) {
 		t.Errorf("second patch = %v", second)
 	}
 	var topics map[string][]string
-	json.Unmarshal([]byte(strings.TrimPrefix(bodies[2], "PUT ")), &topics)
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(bodies[2], "PUT ")), &topics); err != nil {
+		t.Fatal(err)
+	}
 	if fmt.Sprint(topics["names"]) != "[go cli]" {
 		t.Errorf("topics = %v", topics)
 	}
@@ -532,7 +538,9 @@ func TestUpdateSettingsArchiveLast(t *testing.T) {
 		t.Fatalf("order = %s", got)
 	}
 	var last map[string]any
-	json.Unmarshal([]byte(strings.TrimPrefix(bodies[2], "PATCH ")), &last)
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(bodies[2], "PATCH ")), &last); err != nil {
+		t.Fatal(err)
+	}
 	if len(last) != 1 || last["archived"] != true {
 		t.Errorf("last patch = %v", last)
 	}
@@ -636,7 +644,7 @@ func TestListReleasesPaginatedWithAssets(t *testing.T) {
 			t.Errorf("per_page = %q", q.Get("per_page"))
 		}
 		page := 1
-		fmt.Sscan(q.Get("page"), &page)
+		_, _ = fmt.Sscan(q.Get("page"), &page)
 		if page < 3 {
 			w.Header().Set("Link", fmt.Sprintf(`<%s/api/v3/repos/o/n/releases?per_page=100&page=%d>; rel="next"`, f.srv.URL, page+1))
 		}
@@ -715,7 +723,7 @@ func TestDownloadAssetRedirectDropsAuthorization(t *testing.T) {
 	cdn := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cdnAuth.Store(r.Header.Get("Authorization"))
 		cdnHits.Store(r.URL.Path)
-		w.Write([]byte("PAYLOAD"))
+		_, _ = w.Write([]byte("PAYLOAD"))
 	}))
 	defer cdn.Close()
 
@@ -726,7 +734,7 @@ func TestDownloadAssetRedirectDropsAuthorization(t *testing.T) {
 		http.Redirect(w, r, cdn.URL+"/blob/xyz?sig=1", http.StatusFound)
 	})
 	f.handle("GET /repos/o/n/releases/assets/6", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("DIRECT"))
+		_, _ = w.Write([]byte("DIRECT"))
 	})
 	f.handle("GET /repos/o/n/releases/assets/7", notFound)
 	p := f.provider()
@@ -826,7 +834,7 @@ func TestListStarred(t *testing.T) {
 	f := newFakeAPI(t)
 	f.handle("GET /users/bob/starred", func(w http.ResponseWriter, r *http.Request) {
 		page := 1
-		fmt.Sscan(r.URL.Query().Get("page"), &page)
+		_, _ = fmt.Sscan(r.URL.Query().Get("page"), &page)
 		if r.URL.Query().Get("per_page") != "100" {
 			t.Errorf("per_page = %q", r.URL.Query().Get("per_page"))
 		}

@@ -46,7 +46,9 @@ func TestGetRepoNotFoundAndCaseInsensitive(t *testing.T) {
 	if !errors.Is(err, forge.ErrNotFound) {
 		t.Fatalf("want ErrNotFound, got %v", err)
 	}
-	p.AddRepo(forge.Repo{Owner: "Alice", Name: "MyRepo", Description: "d"})
+	if err := p.AddRepo(forge.Repo{Owner: "Alice", Name: "MyRepo", Description: "d"}); err != nil {
+		t.Fatal(err)
+	}
 	r, err := p.GetRepo(ctx, "alice", "myrepo")
 	if err != nil {
 		t.Fatal(err)
@@ -91,9 +93,15 @@ func TestRepoIDs(t *testing.T) {
 
 func TestListReposSortedAndUnknownOwner(t *testing.T) {
 	p := New(Options{})
-	p.AddRepo(forge.Repo{Owner: "o", Name: "zeta"})
-	p.AddRepo(forge.Repo{Owner: "O", Name: "alpha"})
-	p.AddRepo(forge.Repo{Owner: "other", Name: "x"})
+	if err := p.AddRepo(forge.Repo{Owner: "o", Name: "zeta"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.AddRepo(forge.Repo{Owner: "O", Name: "alpha"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.AddRepo(forge.Repo{Owner: "other", Name: "x"}); err != nil {
+		t.Fatal(err)
+	}
 	rs, err := p.ListRepos(ctx, "o")
 	if err != nil {
 		t.Fatal(err)
@@ -114,7 +122,9 @@ func TestListReposSortedAndUnknownOwner(t *testing.T) {
 func TestCopyIsolation(t *testing.T) {
 	p := New(Options{})
 	seed := forge.Repo{Owner: "o", Name: "n", Topics: []string{"a", "b"}}
-	p.AddRepo(seed)
+	if err := p.AddRepo(seed); err != nil {
+		t.Fatal(err)
+	}
 	seed.Topics[0] = "mutated-seed"
 
 	r, _ := p.GetRepo(ctx, "o", "n")
@@ -179,7 +189,9 @@ func TestEnsureOrgIdempotent(t *testing.T) {
 
 func TestUpdateRepoSettings(t *testing.T) {
 	p := New(Options{})
-	p.AddRepo(forge.Repo{Owner: "o", Name: "n", Description: "old", Homepage: "h", Topics: []string{"t"}, DefaultBranch: "master"})
+	if err := p.AddRepo(forge.Repo{Owner: "o", Name: "n", Description: "old", Homepage: "h", Topics: []string{"t"}, DefaultBranch: "master"}); err != nil {
+		t.Fatal(err)
+	}
 	desc, br, priv, arch := "new", "main", true, true
 	home := "http://x"
 	topics := []string{"a", "b"}
@@ -257,7 +269,9 @@ func TestGitBareRepoCreation(t *testing.T) {
 func TestWikiInit(t *testing.T) {
 	requireGit(t)
 	p := New(Options{GitBaseDir: t.TempDir()})
-	p.AddRepo(forge.Repo{Owner: "o", Name: "n"})
+	if err := p.AddRepo(forge.Repo{Owner: "o", Name: "n"}); err != nil {
+		t.Fatal(err)
+	}
 	r, _ := p.GetRepo(ctx, "o", "n")
 	if r.HasWiki {
 		t.Fatal("HasWiki before InitWiki")
@@ -288,7 +302,9 @@ func TestEnsureWiki(t *testing.T) {
 	requireGit(t)
 	dir := t.TempDir()
 	p := New(Options{GitBaseDir: dir})
-	p.AddRepo(forge.Repo{Owner: "o", Name: "n"})
+	if err := p.AddRepo(forge.Repo{Owner: "o", Name: "n"}); err != nil {
+		t.Fatal(err)
+	}
 	u := p.WikiGitURL("o", "n")
 	if out, err := exec.Command("git", "ls-remote", u).CombinedOutput(); err == nil {
 		t.Fatalf("wiki readable before EnsureWiki: %s", out)
@@ -313,7 +329,9 @@ func TestEnsureWiki(t *testing.T) {
 	}
 	// Without GitBaseDir it only validates the repo.
 	q := New(Options{})
-	q.AddRepo(forge.Repo{Owner: "o", Name: "n"})
+	if err := q.AddRepo(forge.Repo{Owner: "o", Name: "n"}); err != nil {
+		t.Fatal(err)
+	}
 	if err := q.EnsureWiki(ctx, "o", "n"); err != nil {
 		t.Fatal(err)
 	}
@@ -448,7 +466,9 @@ func TestAuthAndRate(t *testing.T) {
 func newReleaseFixture(t *testing.T) *Provider {
 	t.Helper()
 	p := New(Options{})
-	p.AddRepo(forge.Repo{Owner: "o", Name: "n"})
+	if err := p.AddRepo(forge.Repo{Owner: "o", Name: "n"}); err != nil {
+		t.Fatal(err)
+	}
 	return p
 }
 
@@ -707,7 +727,9 @@ func TestFailNextOneShot(t *testing.T) {
 
 func TestFailAlwaysAndClear(t *testing.T) {
 	p := New(Options{})
-	p.AddRepo(forge.Repo{Owner: "o", Name: "n"})
+	if err := p.AddRepo(forge.Repo{Owner: "o", Name: "n"}); err != nil {
+		t.Fatal(err)
+	}
 	boom := errors.New("boom")
 	p.FailAlways("GetRepo", boom)
 	for i := 0; i < 3; i++ {
@@ -727,7 +749,9 @@ func TestFailAlwaysAndClear(t *testing.T) {
 
 func TestFailureInjectionEveryErrorMethod(t *testing.T) {
 	p := New(Options{})
-	p.AddRepo(forge.Repo{Owner: "o", Name: "n"})
+	if err := p.AddRepo(forge.Repo{Owner: "o", Name: "n"}); err != nil {
+		t.Fatal(err)
+	}
 	boom := errors.New("boom")
 	calls := map[string]func() error{
 		"GetRepo":            func() error { _, e := p.GetRepo(ctx, "o", "n"); return e },
@@ -778,7 +802,9 @@ func TestRemoveRepo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p.AddRepo(forge.Repo{Owner: "o", Name: "other"})
+	if err := p.AddRepo(forge.Repo{Owner: "o", Name: "other"}); err != nil {
+		t.Fatal(err)
+	}
 	before := len(p.Calls())
 
 	p.RemoveRepo("o", "N") // case-insensitive, like every lookup
@@ -804,7 +830,9 @@ func TestRemoveRepo(t *testing.T) {
 	}
 	p.RemoveRepo("o", "absent") // no-op
 	// Re-adding starts fresh: no releases carried over.
-	p.AddRepo(forge.Repo{Owner: "o", Name: "n"})
+	if err := p.AddRepo(forge.Repo{Owner: "o", Name: "n"}); err != nil {
+		t.Fatal(err)
+	}
 	if rels, _ := p.ListReleases(ctx, "o", "n"); len(rels) != 0 {
 		t.Fatalf("releases carried over: %+v", rels)
 	}
@@ -814,7 +842,9 @@ func TestDeleteRepo(t *testing.T) {
 	requireGit(t)
 	dir := t.TempDir()
 	p := New(Options{GitBaseDir: dir})
-	p.AddRepo(forge.Repo{Owner: "o", Name: "n"})
+	if err := p.AddRepo(forge.Repo{Owner: "o", Name: "n"}); err != nil {
+		t.Fatal(err)
+	}
 	boom := errors.New("boom")
 	p.FailNext("DeleteRepo", boom)
 	if err := p.DeleteRepo(ctx, "o", "n"); !errors.Is(err, boom) {
@@ -843,11 +873,14 @@ func TestDeleteRepo(t *testing.T) {
 
 func TestCallsOrder(t *testing.T) {
 	p := New(Options{})
-	p.AddRepo(forge.Repo{Owner: "o", Name: "n"}) // seeding helpers are not recorded
-	p.GetRepo(ctx, "o", "n")
+	// Seeding helpers are not recorded.
+	if err := p.AddRepo(forge.Repo{Owner: "o", Name: "n"}); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = p.GetRepo(ctx, "o", "n")
 	p.GitURL("o", "n")
-	p.ListRepos(ctx, "o")
-	p.GetRepo(ctx, "o", "missing")
+	_, _ = p.ListRepos(ctx, "o")
+	_, _ = p.GetRepo(ctx, "o", "missing")
 	got := p.Calls()
 	want := []string{"GetRepo", "GitURL", "ListRepos", "GetRepo"}
 	if !reflect.DeepEqual(got, want) {
@@ -861,7 +894,9 @@ func TestCallsOrder(t *testing.T) {
 
 func TestCancelledContext(t *testing.T) {
 	p := New(Options{})
-	p.AddRepo(forge.Repo{Owner: "o", Name: "n"})
+	if err := p.AddRepo(forge.Repo{Owner: "o", Name: "n"}); err != nil {
+		t.Fatal(err)
+	}
 	cctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, err := p.GetRepo(cctx, "o", "n"); !errors.Is(err, context.Canceled) {
@@ -887,7 +922,9 @@ func TestCancelledContext(t *testing.T) {
 
 func TestConcurrencySmoke(t *testing.T) {
 	p := New(Options{Username: "me"})
-	p.AddRepo(forge.Repo{Owner: "o", Name: "shared"})
+	if err := p.AddRepo(forge.Repo{Owner: "o", Name: "shared"}); err != nil {
+		t.Fatal(err)
+	}
 	var wg sync.WaitGroup
 	for g := 0; g < 16; g++ {
 		wg.Add(1)
@@ -895,19 +932,19 @@ func TestConcurrencySmoke(t *testing.T) {
 			defer wg.Done()
 			for i := 0; i < 50; i++ {
 				name := fmt.Sprintf("r%d-%d", g, i)
-				p.CreateRepo(ctx, forge.CreateOptions{Owner: "me", Name: name})
-				p.GetRepo(ctx, "me", name)
-				p.ListRepos(ctx, "me")
+				_, _ = p.CreateRepo(ctx, forge.CreateOptions{Owner: "me", Name: name})
+				_, _ = p.GetRepo(ctx, "me", name)
+				_, _ = p.ListRepos(ctx, "me")
 				tag := fmt.Sprintf("v%d-%d", g, i)
 				rel, err := p.CreateRelease(ctx, "o", "shared", forge.Release{Tag: tag})
 				if err == nil {
-					p.UploadAsset(ctx, "o", "shared", rel.ID, forge.Asset{Name: "a"}, strings.NewReader("data"))
+					_, _ = p.UploadAsset(ctx, "o", "shared", rel.ID, forge.Asset{Name: "a"}, strings.NewReader("data"))
 				}
-				p.ListReleases(ctx, "o", "shared")
+				_, _ = p.ListReleases(ctx, "o", "shared")
 				p.SetRate(forge.Rate{Limit: i})
-				p.RateLimit(ctx)
+				_, _ = p.RateLimit(ctx)
 				p.Star("u", forge.Repo{Owner: "o", Name: name})
-				p.ListStarred(ctx, "u")
+				_, _ = p.ListStarred(ctx, "u")
 				p.Calls()
 				p.GitURL("o", name)
 			}
