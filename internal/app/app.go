@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/url"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -89,6 +91,44 @@ func BuildProviders(cfg *config.Config, o Options) (map[string]forge.Provider, e
 	return provs, nil
 }
 
+// ForgeURL returns the normalised base URL of a configured forge: scheme
+// and host lowercased, default ports and trailing slashes removed, and
+// "https://github.com" for a github forge without a URL. It is recorded with
+// destination ownership so that re-pointing a forge name at another server
+// is detected. "" means the forge has no URL.
+func ForgeURL(f config.Forge) string {
+	raw := strings.TrimRight(strings.TrimSpace(f.URL), "/")
+	if raw == "" && f.Type == "github" {
+		raw = "https://github.com"
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return raw
+	}
+	u.Scheme = strings.ToLower(u.Scheme)
+	host, port := strings.ToLower(u.Hostname()), u.Port()
+	switch {
+	case port != "" && !(u.Scheme == "https" && port == "443" || u.Scheme == "http" && port == "80"):
+		u.Host = net.JoinHostPort(host, port)
+	case strings.Contains(host, ":"):
+		u.Host = "[" + host + "]" // IPv6 literal
+	default:
+		u.Host = host
+	}
+	u.Path = strings.TrimRight(u.Path, "/")
+	u.RawPath = ""
+	return u.String()
+}
+
+// ForgeURLs returns ForgeURL of every configured forge, by name.
+func ForgeURLs(cfg *config.Config) map[string]string {
+	out := make(map[string]string, len(cfg.Forges))
+	for name, f := range cfg.Forges {
+		out[name] = ForgeURL(f)
+	}
+	return out
+}
+
 // Build wires everything up. The caller must Close the App.
 //
 // Unless o.ReadOnly, Build first takes an exclusive OS-level lock on
@@ -153,6 +193,7 @@ func Build(ctx context.Context, cfg *config.Config, o Options) (*App, error) {
 			CacheDir:    filepath.Join(cfg.StateDir, "cache"),
 			Logger:      log,
 			Concurrency: cfg.Concurrency,
+			ForgeURLs:   ForgeURLs(cfg),
 		},
 	}, nil
 }

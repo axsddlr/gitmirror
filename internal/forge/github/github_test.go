@@ -287,7 +287,7 @@ func TestGetRepoMapping(t *testing.T) {
 	f := newFakeAPI(t)
 	f.handle("GET /repos/o/n", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{
-			"name": "n", "owner": map[string]any{"login": "o"},
+			"id": 101, "name": "n", "owner": map[string]any{"login": "o"},
 			"description": "d", "homepage": "http://h", "topics": []string{"a", "b"},
 			"default_branch": "trunk", "private": false, "visibility": "internal",
 			"archived": true, "fork": true, "has_wiki": true, "size": 0,
@@ -312,7 +312,7 @@ func TestGetRepoMapping(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := forge.Repo{Owner: "o", Name: "n", Description: "d", Homepage: "http://h",
+	want := forge.Repo{ID: 101, Owner: "o", Name: "n", Description: "d", Homepage: "http://h",
 		Topics: []string{"a", "b"}, DefaultBranch: "trunk", Private: true, Archived: true,
 		Fork: true, Empty: true, HasWiki: true}
 	if fmt.Sprint(*got) != fmt.Sprint(want) {
@@ -424,7 +424,7 @@ func TestCreateRepoUserAndOrg(t *testing.T) {
 	var userBody, orgBody map[string]any
 	f.handle("POST /user/repos", func(w http.ResponseWriter, r *http.Request) {
 		userBody = decodeBody(t, r)
-		writeJSON(w, 201, map[string]any{"name": "n", "owner": map[string]any{"login": "me"}, "private": true, "has_wiki": true})
+		writeJSON(w, 201, map[string]any{"id": 7, "name": "n", "owner": map[string]any{"login": "me"}, "private": true, "has_wiki": true})
 	})
 	f.handle("POST /orgs/acme/repos", func(w http.ResponseWriter, r *http.Request) {
 		orgBody = decodeBody(t, r)
@@ -443,7 +443,7 @@ func TestCreateRepoUserAndOrg(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.Owner != "me" || r.Name != "n" || !r.Private {
+	if r.Owner != "me" || r.Name != "n" || !r.Private || r.ID != 7 {
 		t.Errorf("repo = %+v", r)
 	}
 	check := func(b map[string]any) {

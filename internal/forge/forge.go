@@ -24,6 +24,9 @@ var ErrUnsupported = errors.New("forge: unsupported")
 
 // Repo is the platform-neutral view of a repository.
 type Repo struct {
+	// ID is the forge's numeric repository id; it changes when a repository
+	// is deleted and re-created under the same name. 0 means unknown.
+	ID            int64
 	Owner         string
 	Name          string
 	Description   string

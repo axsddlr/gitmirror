@@ -202,6 +202,10 @@ type Rule struct {
 	MaxRefDeletionsPercent *int `yaml:"max_ref_deletions_percent"`
 	// Adopt allows writing to a destination repo this tool did not create.
 	Adopt bool `yaml:"adopt"`
+	// AllowPublish allows visibility "match-source" to make an adopted
+	// private destination public. Without it an adopted destination is
+	// never made public.
+	AllowPublish bool `yaml:"allow_publish"`
 }
 
 // Source selects source repositories: exactly one of Owner, StarredBy, Repo.
@@ -260,6 +264,7 @@ type RuleSettings struct {
 	DeletionGrace         time.Duration // how long a source must stay not found before OnSourceDeleted applies
 	DeleteMissingReleases bool
 	Adopt                 bool
+	AllowPublish          bool
 	// MaxRefDeletions and MaxRefDeletionsPercent are the mass ref deletion
 	// guard (see Defaults). A zero MaxRefDeletionsPercent (a RuleSettings not
 	// built by Effective) means the defaults 5 and 50.
@@ -293,6 +298,7 @@ func (r Rule) Effective(d Defaults) RuleSettings {
 		OnSourceDeleted:       d.OnSourceDeleted,
 		DeleteMissingReleases: d.DeleteMissingReleases,
 		Adopt:                 r.Adopt,
+		AllowPublish:          r.AllowPublish,
 	}
 	iv := d.Interval
 	if r.Interval != "" {

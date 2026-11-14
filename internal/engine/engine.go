@@ -18,6 +18,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"time"
 
@@ -30,6 +31,10 @@ import (
 // DefaultMaxAssetSize is the release asset size limit used when
 // Engine.MaxAssetSize is zero (2 GiB).
 const DefaultMaxAssetSize int64 = 2 << 30
+
+// DefaultAssetIdleTimeout is the asset download idle timeout used when
+// Engine.AssetIdleTimeout is zero.
+const DefaultAssetIdleTimeout = 2 * time.Minute
 
 // Engine synchronises mirror pairs. Its exported fields are configuration
 // and must not change while it is in use; the zero value of the unexported
@@ -50,6 +55,14 @@ type Engine struct {
 	// MaxAssetSize is the largest source release asset copied; larger
 	// assets are skipped with a step detail. 0 means DefaultMaxAssetSize.
 	MaxAssetSize int64
+	// AssetIdleTimeout aborts a release asset copy when the source download
+	// delivers no data for this long. 0 means DefaultAssetIdleTimeout.
+	AssetIdleTimeout time.Duration
+	// ForgeURLs maps config forge names to their normalised base URLs. The
+	// destination's URL is recorded with its ownership; a destination whose
+	// forge URL changed is no longer treated as owned. A missing entry
+	// disables that check for the forge.
+	ForgeURLs map[string]string
 	// Now is the clock used for the source-deletion grace period; nil means
 	// time.Now. Tests set it together with Store.SetClock.
 	Now func() time.Time
@@ -119,6 +132,23 @@ func (e *Engine) maxAssetSize() int64 {
 		return DefaultMaxAssetSize
 	}
 	return e.MaxAssetSize
+}
+
+// identityMismatch explains why the destination cur is not the repository
+// the ownership record rec was written for: a different forge repository id
+// (deleted and re-created, or restored from a backup) or a different forge
+// base URL (forges.<name>.url now points at another server). It returns ""
+// when they match; unknown values (0 / "") on either side are not compared.
+func (e *Engine) identityMismatch(rec state.OwnershipRecord, dstForge string, cur *forge.Repo) string {
+	var why []string
+	if rec.RepoID != 0 && cur.ID != 0 && rec.RepoID != cur.ID {
+		why = append(why, fmt.Sprintf("its repository id is %d but gitmirror recorded %d, so it was replaced "+
+			"(deleted and re-created, or restored from a backup)", cur.ID, rec.RepoID))
+	}
+	if url := e.ForgeURLs[dstForge]; rec.ForgeURL != "" && url != "" && rec.ForgeURL != url {
+		why = append(why, fmt.Sprintf("the forge URL of %q changed from %s to %s", dstForge, rec.ForgeURL, url))
+	}
+	return strings.Join(why, "; ")
 }
 
 // lfsAvailable reports (once per Engine) whether git-lfs can be run.

@@ -30,6 +30,23 @@ destroy data.
 * **Ownership and `adopt`.** gitmirror records every destination repository it creates. It refuses
   to write to a pre-existing destination it did not create; set `adopt: true` on the rule to
   allow it (the adopted repository is then pruned like any mirror: refs missing at the source are removed).
+* **Ownership is bound to the repository, not just its name.** With ownership gitmirror records the
+  destination's repository id and the destination forge's base URL. If you delete a mirror and
+  re-create it by hand (or restore it from a backup) under the same name, or point
+  `forges.<name>.url` at another server, the repository is no longer treated as owned: syncs refuse
+  to write to it (until `adopt: true`, which records the new id) and `on_source_deleted` never
+  archives or deletes it. Ownership recorded by versions before this check has no id yet; it is
+  filled in from the current destination on the next run (trust on first use).
+* **Live destinations are never reconciled away.** When a source is transferred or renamed, or a rule
+  is re-pointed, the old pair is never archived or deleted while another configured pair still
+  mirrors into the same destination. The source is also checked again just before acting.
+* **Releases and assets gitmirror did not make are left alone.** A destination release with the same
+  tag as a source release is only updated when gitmirror created it, created the repository, or the
+  rule has `adopt: true`; otherwise it is skipped (noted in the releases step). Destination assets
+  are only deleted when gitmirror uploaded them; assets attached by hand stay.
+* **Stalled downloads time out.** A release asset whose source download delivers no data for 2
+  minutes, or takes longer than max(10 min, 1 s per MiB), is abandoned (the releases step is marked
+  failed and retried next run) so one stalled server cannot block other repositories.
 * **Empty-source guard.** If a source that used to have branches or tags suddenly reports none, the
   run is aborted and the destination is not pruned.
 * **Mass ref deletion guard.** A run that would delete more than `max_ref_deletions` (default 5)
@@ -43,10 +60,16 @@ destroy data.
   `Authorization` header when it is redirected to another host.
 * **`deletion_grace`.** A source repository must keep reporting "not found" for the grace period
   (default 24h, minimum 1h) before `on_source_deleted` (`keep` / `archive` / `delete`) is applied,
-  because forges also answer "not found" when a token merely lost access. `delete` only ever removes
+  because forges also answer "not found" when a token merely lost access. The observation must be
+  continuous: if gitmirror did not check the source for more than max(2 x the rule's interval, 1h)
+  (downtime, failing rule resolution) the grace period starts again. `delete` only ever removes
   repositories gitmirror itself created; adopted ones are archived instead. The default is `keep`.
+* **Archived destinations stay archived.** An archived destination is unarchived only for the
+  duration of a sync. gitmirror records that before unarchiving, so if the process dies before
+  re-archiving, the next run re-archives it.
 * **Visibility never widens.** Destinations are created `private`. With `visibility: match-source`
   a destination is public only if its source is public; it is never made more public than the source.
+  An adopted private destination is never made public unless the rule also sets `allow_publish: true`.
 * **Collision and loop checks.** Self-mirroring, two rules writing to one destination and two rules
   mirroring each other are rejected at config time for literal repos and dropped at runtime for
   templated destinations.

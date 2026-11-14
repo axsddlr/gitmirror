@@ -211,6 +211,7 @@ func (p *Provider) login(ctx context.Context) (string, error) {
 func toRepo(r *gh.Repository) forge.Repo {
 	vis := r.GetVisibility()
 	return forge.Repo{
+		ID:            r.GetID(),
 		Owner:         r.GetOwner().GetLogin(),
 		Name:          r.GetName(),
 		Description:   r.GetDescription(),

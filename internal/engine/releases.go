@@ -2,8 +2,11 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"strings"
+	"sync"
 	"time"
 
 	"gitmirror/internal/forge"
@@ -15,6 +18,7 @@ type releaseTally struct {
 	created, updated, deleted, left   int
 	uploaded, replaced, assetsDeleted int
 	drafts, failures                  int
+	assetsLeft                        int // destination assets not uploaded by gitmirror
 	notes, errs                       []string
 }
 
@@ -35,6 +39,9 @@ func (t *releaseTally) detail() string {
 	}
 	if t.left > 0 {
 		parts = append(parts, fmt.Sprintf("%d destination releases not managed by gitmirror left untouched", t.left))
+	}
+	if t.assetsLeft > 0 {
+		parts = append(parts, fmt.Sprintf("%d destination assets not uploaded by gitmirror left untouched", t.assetsLeft))
 	}
 	parts = append(parts, t.notes...)
 	if t.failures > 0 {
@@ -88,6 +95,10 @@ func (r *pairRun) syncReleases(ctx context.Context) {
 		byTag[dstRels[i].Tag] = &dstRels[i]
 	}
 
+	// A destination release found only by its tag (no mapping) is taken over
+	// only when gitmirror created the repository (the release comes from an
+	// earlier run whose mapping was lost) or the rule opted in with adopt.
+	trustTags := r.ownHow == state.OwnedCreated || r.p.Settings.Adopt
 	t := &releaseTally{}
 	matched := map[int64]bool{}
 	// Oldest first, so the newest source release is also newest on the destination.
@@ -105,6 +116,11 @@ func (r *pairRun) syncReleases(ctx context.Context) {
 			dr = byID[id]
 		}
 		if dr == nil {
+			if byTag[sr.Tag] != nil && !trustTags {
+				matched[byTag[sr.Tag].ID] = true // reported here, not as "left"
+				t.notes = append(t.notes, fmt.Sprintf("destination release %s exists and was not created by gitmirror; skipped", sr.Tag))
+				continue
+			}
 			dr = byTag[sr.Tag]
 		}
 		if dr != nil {
@@ -184,7 +200,9 @@ func (r *pairRun) syncReleases(ctx context.Context) {
 	}
 }
 
-// syncAssets makes dr's assets match sr's. A destination asset is kept only
+// syncAssets makes dr's assets match sr's. Destination assets that are not
+// in the source are deleted only when assetMap says gitmirror uploaded them.
+// A destination asset is kept only
 // when its name and size match and assetMap (destination asset id to source
 // asset id, updated in place) says it was copied from the current source
 // asset, so a source asset replaced by a same-size file is re-copied. A
@@ -259,6 +277,11 @@ func (r *pairRun) syncAssets(ctx context.Context, srp, drp forge.ReleaseProvider
 		if want[a.Name] {
 			continue
 		}
+		if _, mine := assetMap[a.ID]; !mine {
+			// Not uploaded by gitmirror (e.g. attached by hand): leave it.
+			t.assetsLeft++
+			continue
+		}
 		r.action("delete asset %s/%s", dr.Tag, a.Name)
 		if !r.dry() {
 			if err := drp.DeleteAsset(ctx, r.p.DstOwner, r.p.DstName, dr.ID, a.ID); err != nil {
@@ -274,14 +297,88 @@ func (r *pairRun) syncAssets(ctx context.Context, srp, drp forge.ReleaseProvider
 	}
 }
 
-// copyAsset streams one asset from the source straight into the destination
-// without buffering it in memory, returning the new destination asset.
-func (r *pairRun) copyAsset(ctx context.Context, srp, drp forge.ReleaseProvider, dstReleaseID int64, a forge.Asset) (*forge.Asset, error) {
-	rc, err := srp.DownloadAsset(ctx, r.src.Owner, r.src.Name, a)
-	if err != nil {
-		return nil, fmt.Errorf("download: %w", err)
+// minAssetTimeout is the smallest total time limit of one asset copy; assets
+// over 600 MiB get one second per MiB instead (see assetTimeout).
+const minAssetTimeout = 10 * time.Minute
+
+// assetTimeout is the total time limit for copying an asset of size bytes:
+// max(minAssetTimeout, size at 1 MiB/s).
+func assetTimeout(size int64) time.Duration {
+	return max(minAssetTimeout, time.Duration(size>>20)*time.Second)
+}
+
+// errAssetStalled is the cancellation cause of an asset copy whose source
+// download delivered no data for the idle timeout.
+var errAssetStalled = errors.New("asset download stalled")
+
+// idleWatch cancels an asset copy when its download delivers no data for
+// the idle timeout. Every Read that returns data re-arms it.
+type idleWatch struct {
+	timer *time.Timer
+	idle  time.Duration
+
+	mu   sync.Mutex
+	body io.ReadCloser
+}
+
+func (w *idleWatch) Read(p []byte) (int, error) {
+	w.mu.Lock()
+	body := w.body
+	w.mu.Unlock()
+	n, err := body.Read(p)
+	if n > 0 {
+		w.timer.Reset(w.idle)
 	}
+	return n, err
+}
+
+// copyAsset streams one asset from the source straight into the destination
+// without buffering it in memory, returning the new destination asset. The
+// copy runs under its own context: it is cancelled (aborting both the
+// download and the upload) when the download delivers no data for the
+// engine's AssetIdleTimeout, or when the copy exceeds assetTimeout.
+func (r *pairRun) copyAsset(ctx context.Context, srp, drp forge.ReleaseProvider, dstReleaseID int64, a forge.Asset) (*forge.Asset, error) {
+	idle := r.e.AssetIdleTimeout
+	if idle <= 0 {
+		idle = DefaultAssetIdleTimeout
+	}
+	total := assetTimeout(a.Size)
+	cctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	actx, stop := context.WithTimeout(cctx, total)
+	defer stop()
+	w := &idleWatch{idle: idle}
+	w.timer = time.AfterFunc(idle, func() {
+		cancel(errAssetStalled)
+		w.mu.Lock()
+		body := w.body
+		w.mu.Unlock()
+		if body != nil {
+			body.Close() // unblocks a Read that ignores the context
+		}
+	})
+	defer w.timer.Stop()
+	wrap := func(err error) error {
+		switch {
+		case errors.Is(context.Cause(cctx), errAssetStalled):
+			return fmt.Errorf("%w: no data from the source for %s: %v", errAssetStalled, idle, err)
+		case ctx.Err() == nil && errors.Is(actx.Err(), context.DeadlineExceeded):
+			return fmt.Errorf("asset copy exceeded its %s time limit: %v", total, err)
+		}
+		return err
+	}
+	rc, err := srp.DownloadAsset(actx, r.src.Owner, r.src.Name, a)
+	if err != nil {
+		return nil, wrap(fmt.Errorf("download: %w", err))
+	}
+	w.mu.Lock()
+	w.body = rc
+	w.mu.Unlock()
 	defer rc.Close()
-	return drp.UploadAsset(ctx, r.p.DstOwner, r.p.DstName, dstReleaseID,
-		forge.Asset{Name: a.Name, Size: a.Size, ContentType: a.ContentType}, rc)
+	na, err := drp.UploadAsset(actx, r.p.DstOwner, r.p.DstName, dstReleaseID,
+		forge.Asset{Name: a.Name, Size: a.Size, ContentType: a.ContentType}, w)
+	if err != nil {
+		return nil, wrap(err)
+	}
+	return na, nil
 }

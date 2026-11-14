@@ -45,6 +45,7 @@ func TestGitea(t *testing.T) {
 	t.Run("AdoptSafety", s.testAdopt)
 	t.Run("EmptySourceGuard", s.testEmptySource)
 	t.Run("Archive", s.testArchive)
+	t.Run("ReplacedDestination", s.testReplacedDestination)
 }
 
 // seed creates the public repo owner/name on in with branch "main" plus extra
@@ -844,4 +845,44 @@ func lastLines(s string, n int) string {
 		l = l[len(l)-n:]
 	}
 	return strings.Join(l, " | ")
+}
+
+// ---- scenario 10: a destination deleted and re-created by hand ----
+
+func (s *suite) testReplacedDestination(t *testing.T) {
+	a, b := s.a, s.b
+	s.seed(t, a, "alice", "s10", "from A")
+	m := s.newMirror(t, `
+- name: s10
+  from: {forge: a, repo: alice/s10}
+  to: {forge: b, repo: mirrors/s10}
+`)
+	m.eng.ForgeURLs = map[string]string{"a": a.url, "b": b.url}
+	wantStatus(t, m.one("b:mirrors/s10"), state.RunOK)
+	first := b.getRepo(t, "mirrors", "s10")
+	rec, owned, err := m.eng.Store.OwnershipOf(ctxb(), "b", "mirrors/s10")
+	if err != nil || !owned || rec.RepoID == 0 || rec.RepoID != first.ID || rec.ForgeURL != b.url {
+		t.Fatalf("ownership %+v %v %v (B repo id %d)", rec, owned, err, first.ID)
+	}
+
+	// The user deletes the mirror on B and re-creates it by hand.
+	b.mustAPI(t, http.MethodDelete, "/repos/mirrors/s10", nil, nil, http.StatusNoContent)
+	b.mustAPI(t, http.MethodPost, "/orgs/mirrors/repos",
+		map[string]any{"name": "s10", "description": "by hand", "private": false}, nil, http.StatusCreated)
+	again := b.getRepo(t, "mirrors", "s10")
+	if again.ID == first.ID {
+		t.Fatalf("re-created repo kept id %d", again.ID)
+	}
+
+	r := m.one("b:mirrors/s10")
+	wantStatus(t, r, state.RunFailed)
+	if d := wantStep(t, r, "prepare", state.StepFailed).Detail; !strings.Contains(d, "replaced") {
+		t.Fatalf("prepare detail %q", d)
+	}
+	if got := b.getRepo(t, "mirrors", "s10"); got.Description != "by hand" || got.Private {
+		t.Fatalf("hand-made B repo changed: %+v", got)
+	}
+	if refs := s.git.lsRemote(t, b.gitURL("mirrors", "s10")); len(refs) != 0 {
+		t.Fatalf("refs pushed into the hand-made repo: %v", refs)
+	}
 }

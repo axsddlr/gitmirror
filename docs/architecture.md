@@ -50,11 +50,18 @@ A run ends `ok`, `partial` (a non-fatal step failed), `failed` or `aborted`.
    compute the wanted visibility (`private` unless the rule says `match-source` *and* the source is
    public); look up the destination.
    * Destination missing: ensure the owner/org exists (`forge.OrgProvider`), create it, and record
-     ownership `created`.
-   * Destination exists and gitmirror owns it: continue.
-   * Destination exists and gitmirror does **not** own it: the pair fails unless the rule sets
-     `adopt: true` (then ownership `adopted` is recorded).
+     ownership `created` together with the destination's identity: its forge repository id
+     (`forge.Repo.ID`) and the destination forge's normalised base URL (`Engine.ForgeURLs`, set by
+     `app.ForgeURLs`).
+   * Destination exists and gitmirror owns it: continue. An ownership row without identity (written
+     before migration 0006) is completed from the current destination once (trust on first use).
+   * Destination exists and gitmirror does **not** own it, or the recorded id / forge URL differs from
+     the current one (replaced repository, `url` re-pointed): the pair fails unless the rule sets
+     `adopt: true` (then ownership `adopted` with the current identity is recorded).
    * An archived destination is unarchived for the duration of the sync when anything is written.
+     The pair's `unarchived` marker is persisted first and cleared once finalize has restored the
+     archive state; a run that starts with the marker set treats the destination as originally
+     archived, so a crash between unarchive and re-archive is repaired.
 2. **git / lfs**: mirror `refs/heads/*` and `refs/tags/*` through a persistent bare cache
    (force-updates and deletions are propagated: the push prunes). LFS objects are fetched and
    pushed **before** the ref push, so a failed LFS transfer is retried on the next run instead of
@@ -74,11 +81,17 @@ A run ends `ok`, `partial` (a non-fatal step failed), `failed` or `aborted`.
      a dry run). `sync --allow-prune` bypasses it for that run (warning logged, noted in the git step detail).
    * Rejected refs (for example protected branches or hooks) are reported with the ref names.
 3. **settings**: description, homepage, topics, default branch (only when that branch exists in the
-   source refs), visibility (never widened beyond the wanted value). Archiving is deferred to finalize.
+   source refs), visibility (never widened beyond the wanted value; an adopted private destination
+   is never made public unless the rule sets `allow_publish: true`). Archiving is deferred to finalize.
 4. **releases** (`internal/engine/releases.go`): create/update releases and upload their assets;
    release ids are mapped in the state store. Draft releases are skipped. Assets larger than 2 GiB are
    skipped with a note. Only releases gitmirror created are updated or (with `delete_missing_releases`) deleted;
-   other destination releases are left untouched.
+   other destination releases are left untouched. An unmapped destination release with the tag of a
+   source release is taken over only when the destination's ownership is `created` or the rule has
+   `adopt`; otherwise it is skipped with a note. Destination assets missing at the source are deleted
+   only when the asset map says gitmirror uploaded them. Each asset is copied under its own context,
+   cancelled when the download delivers no data for `Engine.AssetIdleTimeout` (default 2m) or the copy
+   exceeds max(10m, size at 1 MiB/s); the asset then counts as a failure (step `failed`, run `partial`).
 5. **wiki**: mirrors `<repo>.wiki.git` when the source has a wiki and both providers support it. A
    first push can fail because the destination wiki repository does not exist yet; the error says
    to create one page in the destination UI and retry.
@@ -92,13 +105,18 @@ and print the actions that would be taken.
 
 | Safeguard | Where |
 |---|---|
-| Never write to a destination gitmirror did not create unless `adopt: true` | `engine.prepare`, `state.Owned` |
+| Never write to a destination gitmirror did not create unless `adopt: true` | `engine.prepare`, `state.OwnershipOf` |
+| Ownership bound to the destination's repository id and forge URL; a replaced repository or re-pointed forge is not owned (no writes, never archived or deleted) | `engine.identityMismatch`, `engine.prepare`, `engine.planDeletion`, `state.MarkOwnedAs` / `state.BackfillOwnership` |
+| Release tag matches only for created destinations or `adopt`; only assets in the asset map are deleted | `engine/releases.go` |
+| Per-asset idle and total timeouts on the download-to-upload stream | `engine.copyAsset` |
+| Crash between unarchive and re-archive repaired by the next run | `engine.prepare` / `finalize`, `state.SetUnarchived` |
 | Empty-source guard before pruning | `engine.syncGit`, `gitx.ErrEmptySource` |
 | Mass ref deletion guard (`max_ref_deletions` / `max_ref_deletions_percent`, bypass `sync --allow-prune`) | `engine.massDeletion`, `gitx.SyncOptions.CheckDeletions` |
 | LFS objects heal when refs were pushed without them | `engine.syncGit`, `gitx.SyncOptions.LFSDigest`, `state.SetLFSDigest` |
 | git never follows HTTP redirects (`http.followRedirects=false`), so the origin-scoped auth header cannot reach another host; LFS endpoints are pinned so `.lfsconfig` in mirrored content is ignored | `gitx/runner.go`, `gitx.lfsTransfer` |
 | State dir, cache dirs `0700`, lock file `0600`; schema migrations run under `BEGIN IMMEDIATE` so concurrent opens apply each migration once | `state.Open`, `gitx` cache, `app/lock.go` |
-| `deletion_grace` before applying `on_source_deleted` (only a positive "not found" counts; any other error leaves the pair alone; the clock restarts when the source reappears) | `engine/reconcile.go`, `state.MarkMissing` |
+| `deletion_grace` before applying `on_source_deleted` (only a positive "not found" counts; any other error leaves the pair alone; the clock restarts when the source reappears or when two observations are more than max(2 x interval, 1h) apart; the source is re-checked under the pair lock before acting) | `engine/reconcile.go`, `state.MarkMissingObserved` |
+| A stored pair whose destination is also the destination of a current or dropped pair (transferred source, re-pointed rule) is never reconciled | `engine.Reconcile` |
 | After the grace, a no-op outcome (destination not owned or already gone) is recorded as a run once per missing period, not every cycle | `engine/reconcile.go`, `state.SetMissingReported` |
 | Durable audit record of every destination create, adopt, archive and delete (real runs only); `DeletePair` does not remove it; shown by `status --audit N` | `engine/audit.go`, `state.Audit` / `state.AuditLog` |
 | Repo deletion only for destinations gitmirror created, and only when the rule opts in with `on_source_deleted: delete`; otherwise archive | `engine/reconcile.go` |

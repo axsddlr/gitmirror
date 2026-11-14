@@ -109,6 +109,7 @@ type Provider struct {
 	assetData   map[int64][]byte
 	nextRelID   int64
 	nextAssetID int64
+	nextRepoID  int64
 	rate        forge.Rate
 	calls       []string
 	failNext    map[string][]error
@@ -300,6 +301,9 @@ func (p *Provider) AddOwner(name string, isOrg bool) {
 
 // AddRepo seeds a repo (replacing one with the same name, keeping its
 // releases) and creates its bare git repository when GitBaseDir is set.
+// A zero r.ID keeps the replaced repo's id, or assigns the next id to a new
+// repo (so a repo removed and added again gets a new id, like a re-created
+// repository on a real forge).
 func (p *Provider) AddRepo(r forge.Repo) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -318,8 +322,15 @@ func (p *Provider) AddRepo(r forge.Repo) error {
 	}
 	k := key(r.Owner, r.Name)
 	if e, ok := p.repos[k]; ok {
+		if r.ID == 0 {
+			r.ID = e.repo.ID // same repository, new metadata
+		}
 		e.repo = r
 		return nil
+	}
+	if r.ID == 0 {
+		p.nextRepoID++
+		r.ID = p.nextRepoID
 	}
 	p.repos[k] = &repoEntry{repo: r}
 	return nil
@@ -504,7 +515,9 @@ func (p *Provider) CreateRepo(ctx context.Context, opts forge.CreateOptions) (*f
 	if !known {
 		p.owners[ol] = false
 	}
+	p.nextRepoID++
 	r := forge.Repo{
+		ID:            p.nextRepoID,
 		Owner:         opts.Owner,
 		Name:          opts.Name,
 		Description:   opts.Description,

@@ -280,6 +280,7 @@ func (p *Provider) Login(ctx context.Context) (string, error) {
 // ---- repositories ----
 
 type apiRepo struct {
+	ID    int64  `json:"id"`
 	Name  string `json:"name"`
 	Owner struct {
 		Login string `json:"login"`
@@ -296,7 +297,7 @@ type apiRepo struct {
 }
 
 func (a apiRepo) repo() forge.Repo {
-	return forge.Repo{Owner: a.Owner.Login, Name: a.Name, Description: a.Description, Homepage: a.Website,
+	return forge.Repo{ID: a.ID, Owner: a.Owner.Login, Name: a.Name, Description: a.Description, Homepage: a.Website,
 		Topics: a.Topics, DefaultBranch: a.DefaultBranch, Private: a.Private, Archived: a.Archived,
 		Fork: a.Fork, Empty: a.Empty, HasWiki: a.HasWiki}
 }

@@ -34,7 +34,7 @@ Rules of the loader (`internal/config`):
 | Key | Type | Default | Validation | Description |
 |---|---|---|---|---|
 | `type` | string | none (required) | lower-cased and trimmed; one of `github`, `gitea` (`config.KnownForgeTypes`). Use `gitea` for Forgejo. | Provider type. |
-| `url` | string | none | Required for `gitea`. If set: absolute `http`/`https` URL with a host. Trailing `/` trimmed. | Base URL. For `github` the provider default is `https://api.github.com` (set `url` for GitHub Enterprise). |
+| `url` | string | none | Required for `gitea`. If set: absolute `http`/`https` URL with a host. Trailing `/` trimmed. | Base URL. For `github` the provider default is `https://api.github.com` (set `url` for GitHub Enterprise). The normalised URL is recorded with the ownership of every destination created or adopted on this forge; changing it to another server makes those destinations unowned (they need `adopt: true` again). |
 | `token` | string | none | Exactly one of `token` / `token_file` is required; both set is an error. | API token; also used for git over HTTPS. |
 | `token_file` | string | none | File must exist and be non-empty after trimming. | Path of a file holding the token (Docker/Compose secrets, systemd credentials). |
 | `username` | string | `x-access-token` (github), `git` (gitea) | none | Username for git-over-HTTP basic auth. |
@@ -49,7 +49,7 @@ All keys can be overridden per rule.
 | `include` | list of string | `[git, lfs, settings, releases, wiki]` | non-empty; each one of `git`, `lfs`, `settings`, `releases`, `wiki`; `lfs`, `releases`, `wiki` require `git`; duplicates removed | What to mirror. |
 | `visibility` | string | `private` | `private` or `match-source` | Visibility of destination repos. `private` keeps destinations private; `match-source` is public only if the source is public. A destination is never made more public than its source. |
 | `on_source_deleted` | string | `keep` | `keep`, `archive`, `delete` | Action once a source has been gone for `deletion_grace`. `delete` only deletes destinations gitmirror created (adopted ones, and providers that cannot delete, are archived instead). |
-| `deletion_grace` | duration string | `24h` | Go duration, >= `1h` | The source must continuously report "not found" this long before `on_source_deleted` is applied. |
+| `deletion_grace` | duration string | `24h` | Go duration, >= `1h` | The source must continuously report "not found" this long before `on_source_deleted` is applied. If two consecutive checks are more than max(2 x `interval`, 1h) apart the grace period restarts. |
 | `delete_missing_releases` | bool | `false` | none | Delete destination releases (ones gitmirror created) that no longer exist at the source. |
 | `max_ref_deletions` | int | `5` | `>= 0` | Mass ref deletion guard, count part: a run is aborted (status `aborted`, nothing pushed) when it would delete more than this many destination branches/tags **and** more than `max_ref_deletions_percent` of them. `sync --allow-prune` bypasses the guard for one run. |
 | `max_ref_deletions_percent` | int | `50` | `1..100` | Mass ref deletion guard, percentage part (of the destination's branches and tags before the push). |
@@ -83,7 +83,8 @@ All keys can be overridden per rule.
 | `delete_missing_releases` | bool | `defaults.delete_missing_releases` | none | Override (an explicit `false` overrides a `true` default). |
 | `max_ref_deletions` | int | `defaults.max_ref_deletions` | as above | Override (an explicit `0` overrides the default). |
 | `max_ref_deletions_percent` | int | `defaults.max_ref_deletions_percent` | as above | Override. |
-| `adopt` | bool | `false` | none (rule-level only; not in `defaults`) | Allow writing into destination repos that gitmirror did not create. Without it such a destination makes the pair fail. Adopted destinations are pruned like any mirror (refs missing at the source are removed) and are archived rather than deleted. |
+| `adopt` | bool | `false` | none (rule-level only; not in `defaults`) | Allow writing into destination repos that gitmirror did not create. Without it such a destination makes the pair fail. Adopted destinations are pruned like any mirror (refs missing at the source are removed) and are archived rather than deleted. Also needed to keep mirroring into a destination that was replaced (deleted and re-created, restored from a backup) or whose forge `url` changed; the new repository id is then recorded. With `adopt`, destination releases with a source release's tag are updated even if gitmirror did not create them. |
+| `allow_publish` | bool | `false` | none (rule-level only; not in `defaults`) | With `visibility: match-source`, allow an adopted destination that is private to be made public when its source is public. Without it an adopted destination's visibility is only ever narrowed. Destinations gitmirror created are not affected. |
 
 ### `rules[].from`
 

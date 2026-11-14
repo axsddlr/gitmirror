@@ -107,6 +107,9 @@ type PairState struct {
 	// LFSDigest is the source ref digest for which LFS objects were last
 	// copied to the destination ("" if never).
 	LFSDigest string
+	// Unarchived is set while gitmirror has unarchived the destination for
+	// a sync and not yet restored its archived state (see SetUnarchived).
+	Unarchived bool
 }
 
 // Run is one recorded sync run of a pair.
@@ -298,6 +301,58 @@ func (s *Store) MarkOwned(ctx context.Context, dstForge, dstRepo string, how Own
 	return err
 }
 
+// OwnershipRecord is a destination ownership row. RepoID and ForgeURL
+// identify the repository ownership was recorded for (the forge's repository
+// id and the destination forge's normalised base URL); 0 and "" mean unknown
+// (rows from before identities were recorded, or a provider that reports no
+// id).
+type OwnershipRecord struct {
+	How      Ownership
+	RepoID   int64
+	ForgeURL string
+}
+
+// MarkOwnedAs records that the tool owns the destination repo, together with
+// its identity. Unlike MarkOwned, an existing row is overwritten entirely.
+func (s *Store) MarkOwnedAs(ctx context.Context, dstForge, dstRepo string, how Ownership, repoID int64, forgeURL string) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO ownership(dst_forge, dst_repo, how, created_at, dst_repo_id, forge_url)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT(dst_forge, dst_repo) DO UPDATE SET how = excluded.how, dst_repo_id = excluded.dst_repo_id,
+			forge_url = excluded.forge_url`,
+		dstForge, strings.ToLower(dstRepo), string(how), s.now().UnixNano(), repoID, forgeURL)
+	return err
+}
+
+// OwnershipOf returns the ownership row of the destination repo; ok is false
+// when it is not owned.
+func (s *Store) OwnershipOf(ctx context.Context, dstForge, dstRepo string) (OwnershipRecord, bool, error) {
+	var rec OwnershipRecord
+	var how string
+	err := s.db.QueryRowContext(ctx, `SELECT how, dst_repo_id, forge_url FROM ownership WHERE dst_forge = ? AND dst_repo = ?`,
+		dstForge, strings.ToLower(dstRepo)).Scan(&how, &rec.RepoID, &rec.ForgeURL)
+	if errors.Is(err, sql.ErrNoRows) {
+		return OwnershipRecord{}, false, nil
+	}
+	if err != nil {
+		return OwnershipRecord{}, false, err
+	}
+	rec.How = Ownership(how)
+	return rec, true, nil
+}
+
+// BackfillOwnership fills an owned destination's unknown identity fields
+// (RepoID 0, ForgeURL "") with the given values; fields already set are
+// never changed, and an unowned destination gets no row. Zero/empty
+// arguments leave the corresponding field alone.
+func (s *Store) BackfillOwnership(ctx context.Context, dstForge, dstRepo string, repoID int64, forgeURL string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE ownership SET
+		dst_repo_id = CASE WHEN dst_repo_id = 0 THEN ? ELSE dst_repo_id END,
+		forge_url = CASE WHEN forge_url = '' THEN ? ELSE forge_url END
+		WHERE dst_forge = ? AND dst_repo = ?`,
+		repoID, forgeURL, dstForge, strings.ToLower(dstRepo))
+	return err
+}
+
 // Owned reports whether the destination repo is owned and how.
 func (s *Store) Owned(ctx context.Context, dstForge, dstRepo string) (Ownership, bool, error) {
 	var how string
@@ -321,7 +376,7 @@ func (s *Store) ReleaseOwnership(ctx context.Context, dstForge, dstRepo string) 
 }
 
 const pairCols = `rule, src_forge, src_repo, dst_forge, dst_repo, last_digest, last_ref_count,
-	last_success, last_attempt, last_error, consecutive_failures, lfs_digest`
+	last_success, last_attempt, last_error, consecutive_failures, lfs_digest, unarchived`
 
 type scanner interface{ Scan(...any) error }
 
@@ -329,7 +384,7 @@ func scanPair(r scanner) (PairState, error) {
 	var p PairState
 	var succ, att int64
 	err := r.Scan(&p.Key.Rule, &p.Key.SrcForge, &p.Key.SrcRepo, &p.Key.DstForge, &p.Key.DstRepo,
-		&p.LastDigest, &p.LastRefCount, &succ, &att, &p.LastError, &p.ConsecutiveFailures, &p.LFSDigest)
+		&p.LastDigest, &p.LastRefCount, &succ, &att, &p.LastError, &p.ConsecutiveFailures, &p.LFSDigest, &p.Unarchived)
 	p.LastSuccess, p.LastAttempt = fromNanos(succ), fromNanos(att)
 	return p, err
 }
@@ -448,6 +503,21 @@ func (s *Store) FinishRun(ctx context.Context, id int64, status RunStatus, steps
 // creates it). FinishRun leaves it unchanged.
 func (s *Store) SetLFSDigest(ctx context.Context, k PairKey, digest string) error {
 	res, err := s.db.ExecContext(ctx, `UPDATE pairs SET lfs_digest = ? WHERE key = ?`, digest, k.String())
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return fmt.Errorf("state: pair %s not found", k)
+	}
+	return nil
+}
+
+// SetUnarchived sets or clears the pair's "unarchived by gitmirror" marker.
+// The engine sets it before unarchiving a destination for a sync and clears
+// it once the archived state is restored, so a run that dies in between is
+// repaired by the next one. The pair must exist (StartRun creates it).
+func (s *Store) SetUnarchived(ctx context.Context, k PairKey, on bool) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE pairs SET unarchived = ? WHERE key = ?`, on, k.String())
 	if err != nil {
 		return err
 	}
@@ -600,20 +670,61 @@ func (s *Store) DeleteAssetMapping(ctx context.Context, k PairKey, dstAssetID in
 // the original first-seen time (the store clock at the first call) until
 // ClearMissing removes the record.
 func (s *Store) MarkMissing(ctx context.Context, k PairKey) (firstSeen time.Time, err error) {
+	return s.MarkMissingObserved(ctx, k, 0)
+}
+
+// MarkMissingObserved is MarkMissing for an observation that must be
+// continuous: it also records the observation time (last_seen), and when
+// maxGap is positive and the previous observation is older than maxGap (or
+// unknown, for a record written before last_seen existed) the missing
+// period restarts: first_seen becomes now and the reported flag is reset.
+// It returns the (possibly restarted) first-seen time.
+func (s *Store) MarkMissingObserved(ctx context.Context, k PairKey, maxGap time.Duration) (firstSeen time.Time, err error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return time.Time{}, err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `INSERT INTO missing(pair_key, first_seen) VALUES (?, ?)
-		ON CONFLICT(pair_key) DO NOTHING`, k.String(), s.now().UTC().UnixNano()); err != nil {
+	now := s.now().UTC()
+	var first, last int64
+	err = tx.QueryRowContext(ctx, `SELECT first_seen, last_seen FROM missing WHERE pair_key = ?`, k.String()).Scan(&first, &last)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		first = now.UnixNano()
+		if _, err := tx.ExecContext(ctx, `INSERT INTO missing(pair_key, first_seen, last_seen) VALUES (?, ?, ?)`,
+			k.String(), first, first); err != nil {
+			return time.Time{}, err
+		}
+	case err != nil:
 		return time.Time{}, err
+	case maxGap > 0 && (last == 0 || now.Sub(fromNanos(last)) > maxGap):
+		first = now.UnixNano()
+		if _, err := tx.ExecContext(ctx, `UPDATE missing SET first_seen = ?, last_seen = ?, reported = 0 WHERE pair_key = ?`,
+			first, first, k.String()); err != nil {
+			return time.Time{}, err
+		}
+	default:
+		if _, err := tx.ExecContext(ctx, `UPDATE missing SET last_seen = ? WHERE pair_key = ?`,
+			now.UnixNano(), k.String()); err != nil {
+			return time.Time{}, err
+		}
 	}
-	var n int64
-	if err := tx.QueryRowContext(ctx, `SELECT first_seen FROM missing WHERE pair_key = ?`, k.String()).Scan(&n); err != nil {
-		return time.Time{}, err
+	return fromNanos(first), tx.Commit()
+}
+
+// MissingRecord returns the pair's missing record: when the source was
+// first and last recorded as not found (last is zero for a record written
+// before last_seen existed); ok is false if there is no record.
+func (s *Store) MissingRecord(ctx context.Context, k PairKey) (first, last time.Time, ok bool, err error) {
+	var f, l int64
+	err = s.db.QueryRowContext(ctx, `SELECT first_seen, last_seen FROM missing WHERE pair_key = ?`, k.String()).Scan(&f, &l)
+	if errors.Is(err, sql.ErrNoRows) {
+		return time.Time{}, time.Time{}, false, nil
 	}
-	return fromNanos(n), tx.Commit()
+	if err != nil {
+		return time.Time{}, time.Time{}, false, err
+	}
+	return fromNanos(f), fromNanos(l), true, nil
 }
 
 // ClearMissing forgets that the pair's source was missing, restarting its

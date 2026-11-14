@@ -49,6 +49,11 @@ type pairRun struct {
 
 	origArchived bool // destination was archived when the run started
 	unarchived   bool // we (or, in a dry run, would) unarchive it
+	// markerSet: the pair's "unarchived by gitmirror" marker is set in the
+	// store (by this run before unarchiving, or left by an interrupted run).
+	markerSet bool
+
+	ownHow state.Ownership // how gitmirror owns the destination (after prepare)
 
 	srcRefs      []gitx.Ref
 	srcRefsKnown bool
@@ -223,10 +228,24 @@ func (r *pairRun) prepare(ctx context.Context) bool {
 		vis = "private"
 	}
 
+	// A previous run that unarchived the destination and died before
+	// restoring it leaves the marker set.
+	prev, _, err := r.e.Store.Pair(ctx, r.key)
+	if err != nil {
+		return fail(fmt.Errorf("read pair state: %w", err))
+	}
+	r.markerSet = prev.Unarchived
+	forgeURL := r.e.ForgeURLs[p.DstForge]
+
 	var detail string
 	dst, err := r.dstP.GetRepo(ctx, p.DstOwner, p.DstName)
 	switch {
 	case errors.Is(err, forge.ErrNotFound):
+		r.ownHow = state.OwnedCreated
+		if r.markerSet {
+			// The repository the marker was about is gone.
+			r.clearMarker(ctx)
+		}
 		r.action("create repository %s (%s)", r.dstName(), vis)
 		if r.dry() {
 			r.dst = &forge.Repo{Owner: p.DstOwner, Name: p.DstName, Description: src.Description, Private: r.wantPriv}
@@ -247,7 +266,7 @@ func (r *pairRun) prepare(ctx context.Context) bool {
 		if err != nil {
 			return fail(fmt.Errorf("create destination %s: %w", r.dstName(), err))
 		}
-		if err := r.e.Store.MarkOwned(context.WithoutCancel(ctx), p.DstForge, p.DstFullName(), state.OwnedCreated); err != nil {
+		if err := r.e.Store.MarkOwnedAs(context.WithoutCancel(ctx), p.DstForge, p.DstFullName(), state.OwnedCreated, created.ID, forgeURL); err != nil {
 			return fail(fmt.Errorf("record ownership of %s: %w", r.dstName(), err))
 		}
 		r.e.audit(ctx, r.log, r.key, state.AuditCreate, fmt.Sprintf("created %s repository (trigger %s)", vis, r.opt.trigger()))
@@ -256,33 +275,69 @@ func (r *pairRun) prepare(ctx context.Context) bool {
 	case err != nil:
 		return fail(fmt.Errorf("get destination %s: %w", r.dstName(), err))
 	default:
-		how, owned, err := r.e.Store.Owned(ctx, p.DstForge, p.DstFullName())
+		rec, owned, err := r.e.Store.OwnershipOf(ctx, p.DstForge, p.DstFullName())
 		if err != nil {
 			return fail(fmt.Errorf("read ownership of %s: %w", r.dstName(), err))
 		}
-		if !owned {
-			if !p.Settings.Adopt {
-				return fail(fmt.Errorf("destination %s already exists and was not created by gitmirror; "+
-					"refusing to write to it. Set adopt: true on rule %q to mirror into it", r.dstName(), p.Rule))
+		mismatch := ""
+		if owned {
+			mismatch = r.e.identityMismatch(rec, p.DstForge, dst)
+		}
+		switch {
+		case (!owned || mismatch != "") && !p.Settings.Adopt:
+			if mismatch != "" {
+				return fail(fmt.Errorf("destination %s is not the repository gitmirror %s: %s; "+
+					"refusing to write to it. Set adopt: true on rule %q to mirror into it anyway", r.dstName(), rec.How, mismatch, p.Rule))
 			}
+			return fail(fmt.Errorf("destination %s already exists and was not created by gitmirror; "+
+				"refusing to write to it. Set adopt: true on rule %q to mirror into it", r.dstName(), p.Rule))
+		case !owned || mismatch != "":
 			r.action("adopt existing repository %s", r.dstName())
 			if !r.dry() {
-				if err := r.e.Store.MarkOwned(context.WithoutCancel(ctx), p.DstForge, p.DstFullName(), state.OwnedAdopted); err != nil {
+				if err := r.e.Store.MarkOwnedAs(context.WithoutCancel(ctx), p.DstForge, p.DstFullName(), state.OwnedAdopted, dst.ID, forgeURL); err != nil {
 					return fail(fmt.Errorf("record ownership of %s: %w", r.dstName(), err))
 				}
-				r.e.audit(ctx, r.log, r.key, state.AuditAdopt, fmt.Sprintf("adopted existing repository (trigger %s)", r.opt.trigger()))
+				what := "adopted existing repository"
+				if mismatch != "" {
+					what += " (replaced: " + mismatch + ")"
+				}
+				r.e.audit(ctx, r.log, r.key, state.AuditAdopt, fmt.Sprintf("%s (trigger %s)", what, r.opt.trigger()))
 			}
+			r.ownHow = state.OwnedAdopted
 			detail = "destination adopted"
-		} else {
-			detail = "destination exists (" + string(how) + ")"
+		default:
+			// Ownership rows from before identities were recorded are
+			// completed from the current destination once (trust on first use).
+			if !r.dry() && (rec.RepoID == 0 && dst.ID != 0 || rec.ForgeURL == "" && forgeURL != "") {
+				if err := r.e.Store.BackfillOwnership(context.WithoutCancel(ctx), p.DstForge, p.DstFullName(), dst.ID, forgeURL); err != nil {
+					return fail(fmt.Errorf("record identity of %s: %w", r.dstName(), err))
+				}
+				r.log.Info("engine: recorded destination identity", "repo_id", dst.ID, "forge_url", forgeURL)
+			}
+			r.ownHow = rec.How
+			detail = "destination exists (" + string(rec.How) + ")"
 		}
 		r.dst, r.dstExists = dst, true
 	}
 
 	r.origArchived = r.dst.Archived
+	if r.markerSet && r.dstExists && !r.dst.Archived {
+		// An interrupted run unarchived it: its original state is archived.
+		r.origArchived, r.unarchived = true, true
+		r.log.Warn("engine: destination was left unarchived by an interrupted run; it will be re-archived")
+		detail += "; left unarchived by an interrupted run"
+	}
 	if r.dst.Archived && r.writes() {
 		r.action("unarchive %s for the sync", r.dstName())
 		if !r.dry() {
+			if !r.markerSet {
+				// Persist the intent first, so a crash before re-archiving
+				// is repaired by the next run.
+				if err := r.e.Store.SetUnarchived(context.WithoutCancel(ctx), r.key, true); err != nil {
+					return fail(fmt.Errorf("record unarchive of %s: %w", r.dstName(), err))
+				}
+				r.markerSet = true
+			}
 			f := false
 			if err := r.dstP.UpdateRepoSettings(ctx, p.DstOwner, p.DstName, forge.Settings{Archived: &f}); err != nil {
 				return fail(fmt.Errorf("unarchive %s: %w", r.dstName(), err))
@@ -578,7 +633,13 @@ func (r *pairRun) syncSettings(ctx context.Context) {
 	} else if note != "" {
 		notes = append(notes, note)
 	}
-	if r.wantPriv != cur.Private {
+	switch {
+	case r.wantPriv == cur.Private:
+	case !r.wantPriv && r.ownHow == state.OwnedAdopted && !r.p.Settings.AllowPublish:
+		// Never widen the visibility of a repository gitmirror did not
+		// create unless the rule explicitly allows it.
+		notes = append(notes, "visibility left private: the destination was adopted (set allow_publish: true on the rule to make it public)")
+	default:
 		v := r.wantPriv
 		s.Private = &v
 		changed = append(changed, "visibility")
@@ -683,6 +744,7 @@ func (r *pairRun) finalize(ctx context.Context) {
 		final = r.src.Archived
 	}
 	if !final || r.dst.Archived {
+		r.clearMarker(ctx)
 		return
 	}
 	start := time.Now()
@@ -703,10 +765,24 @@ func (r *pairRun) finalize(ctx context.Context) {
 		return
 	}
 	r.dst.Archived = true
+	r.clearMarker(ctx)
 	if verb == "archive" {
 		// Re-archiving a destination unarchived only for this sync restores
 		// its state and is not audited.
 		r.e.audit(ctx, r.log, r.key, state.AuditArchive, fmt.Sprintf("source archived (trigger %s)", r.opt.trigger()))
 	}
 	r.record(StepFinalize, start, state.StepOK, verb+"d destination")
+}
+
+// clearMarker clears the pair's "unarchived by gitmirror" marker once the
+// destination's archived state is final (never in a dry run).
+func (r *pairRun) clearMarker(ctx context.Context) {
+	if !r.markerSet || r.dry() {
+		return
+	}
+	if err := r.e.Store.SetUnarchived(context.WithoutCancel(ctx), r.key, false); err != nil {
+		r.log.Warn("engine: clear unarchived marker", "err", err)
+		return
+	}
+	r.markerSet = false
 }

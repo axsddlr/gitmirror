@@ -26,6 +26,24 @@ Branch: `build/foundations` (local only, nothing pushed).
 - `${VAR}` inside YAML flow maps must be quoted; README examples must show `token: "${GITHUB_TOKEN}"`.
 - gitx in-process lock map is never pruned (one entry per pair; fine at expected scale).
 - Scheduled interval counts from enqueue time, not job start (fine with coalescing; document).
+- Review batch 2 (data-loss + concurrency) implemented, uncommitted: reconcile skips stale pairs whose
+  destination a live pair targets and re-checks the source under the pair lock; ownership bound to
+  destination repo id + forge URL (migration 0006, TOFU backfill); release tag-match only for created
+  destinations or `adopt`, only mapped assets deleted; per-asset idle (2m) / total timeouts; deletion
+  grace restarts after an observation gap > max(2 x interval, 1h); persisted "unarchived" marker;
+  `allow_publish` for adopted destinations. Integration subtest `ReplacedDestination` added.
+- Follow-ups from batch 2 (not done):
+  - Ownership is still keyed by forge *name*: renaming a forge entry in the config orphans ownership
+    (fails safe: destinations become unowned and need `adopt`).
+  - TOFU backfill trusts whatever repository exists on the first run after upgrading; a repo replaced
+    before the upgrade is adopted silently.
+  - The asset idle timer measures reads by the uploader, so a destination that applies backpressure
+    for longer than `AssetIdleTimeout` also aborts the copy (counted as a failure, retried next run).
+  - Replacing a same-name destination asset with a different size still deletes it even when it is
+    not in the asset map (only extra assets are protected); applies to releases gitmirror manages.
+  - `delete_missing_releases` deletes a mapped release including any assets attached to it by hand.
+  - The unarchived marker is per pair; two pairs into one destination (only possible across a
+    transfer) could re-archive based on the other pair's marker.
 
 ## Local notes
 

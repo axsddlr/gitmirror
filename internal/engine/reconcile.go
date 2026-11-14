@@ -27,16 +27,25 @@ const DefaultDeletionGrace = 24 * time.Hour
 //
 // A stored pair is considered only when its rule is in settings (rules
 // removed from the config are left alone), the rule's resolution was
-// complete, and the pair is neither in current nor in dropped. Even then
-// only a positive "not found" from the source forge counts: if the source
-// exists (it was merely filtered out) its missing record is cleared, and any
-// other error leaves the pair untouched.
+// complete, the pair is neither in current nor in dropped, and its
+// destination is not the destination of any pair in current or dropped, nor
+// of a stored pair of a configured rule that was not resolved this run (a
+// transferred source or a re-pointed rule leaves a stale pair behind whose
+// destination a live pair still mirrors into; such a stale pair is skipped
+// and its missing record cleared). Even then only a positive "not found"
+// from the source forge counts: if the source exists (it was merely
+// filtered out) its missing record is cleared, and any other error leaves
+// the pair untouched. The source is checked again under the pair lock, so a
+// sync that finished in between is not missed.
 //
 // Forges answer "not found" for repositories the token merely lost access
 // to, so the policy is applied only once the source has been continuously
 // missing for the rule's DeletionGrace, measured from the first not-found
-// (Store.MarkMissing). Until then the pair gets a report saying when the
-// policy would apply, and no run is recorded.
+// (Store.MarkMissingObserved). Observation must be continuous: when the
+// previous not-found is older than max(2 x the rule's interval, 1h) (the
+// process was down, or the rule's resolution was incomplete) the grace
+// period restarts. Until then the pair gets a report saying when the policy
+// would apply, and no run is recorded.
 //
 // Policies: "keep" does nothing; "archive" archives a destination gitmirror
 // owns; "delete" deletes a destination gitmirror created, when the provider
@@ -57,11 +66,20 @@ func (e *Engine) Reconcile(ctx context.Context, current []resolve.Pair, complete
 		return nil
 	}
 	skip := map[string]bool{}
-	for _, p := range current {
-		skip[p.Key().String()] = true
+	live := map[string]bool{} // destinations of current and dropped pairs
+	for _, ps := range [][]resolve.Pair{current, dropped} {
+		for _, p := range ps {
+			skip[p.Key().String()] = true
+			live[dstIdentity(p.DstForge, p.DstFullName())] = true
+		}
 	}
-	for _, p := range dropped {
-		skip[p.Key().String()] = true
+	// Rules that are configured but were not resolved in this run (e.g.
+	// `sync --rule other`) may still mirror into a destination: treat their
+	// stored pairs' destinations as live too.
+	for _, st := range states {
+		if _, configured := settings[st.Key.Rule]; configured && !complete[st.Key.Rule] {
+			live[dstIdentity(st.Key.DstForge, st.Key.DstRepo)] = true
+		}
 	}
 	var reps []Report
 	for _, st := range states {
@@ -74,6 +92,17 @@ func (e *Engine) Reconcile(ctx context.Context, current []resolve.Pair, complete
 		}
 		rs, ok := settings[k.Rule]
 		if !ok {
+			continue
+		}
+		if live[dstIdentity(k.DstForge, k.DstRepo)] {
+			// A live pair mirrors into this destination (the source was
+			// transferred or the rule re-pointed): never act on it here.
+			log.Debug("engine: reconcile: destination is mirrored by a live pair; skipping stale pair", "pair", k.String())
+			if !opt.DryRun {
+				if err := e.Store.ClearMissing(ctx, k); err != nil {
+					log.Warn("engine: reconcile: clear missing record", "pair", k.String(), "err", err)
+				}
+			}
 			continue
 		}
 		srcP, ok := e.Providers[k.SrcForge]
@@ -96,11 +125,22 @@ func (e *Engine) Reconcile(ctx context.Context, current []resolve.Pair, complete
 			log.Warn("engine: reconcile: cannot confirm source deletion; leaving pair alone", "pair", k.String(), "err", err)
 			continue
 		}
-		if rep, ok := e.reconcileOne(ctx, k, rs, opt); ok {
+		if rep, ok := e.reconcileOne(ctx, k, srcP, rs, opt); ok {
 			reps = append(reps, rep)
 		}
 	}
 	return reps
+}
+
+// dstIdentity is the key of a destination: forge name and lowercase repo.
+func dstIdentity(dstForge, dstRepo string) string {
+	return dstForge + "\x00" + strings.ToLower(dstRepo)
+}
+
+// missingGap is the longest allowed time between two not-found
+// observations of a source before its deletion grace restarts.
+func missingGap(rs config.RuleSettings) time.Duration {
+	return max(2*rs.Interval, time.Hour)
 }
 
 func (e *Engine) now() time.Time {
@@ -112,7 +152,7 @@ func (e *Engine) now() time.Time {
 
 // reconcileOne handles a pair whose source was reported as not found. ok is
 // false when there is nothing to report.
-func (e *Engine) reconcileOne(ctx context.Context, k state.PairKey, rs config.RuleSettings, opt Options) (rep Report, ok bool) {
+func (e *Engine) reconcileOne(ctx context.Context, k state.PairKey, srcP forge.Provider, rs config.RuleSettings, opt Options) (rep Report, ok bool) {
 	rep.Key = k
 	unlock, err := e.lock(ctx, k.String())
 	if err != nil {
@@ -121,6 +161,22 @@ func (e *Engine) reconcileOne(ctx context.Context, k state.PairKey, rs config.Ru
 	}
 	defer unlock()
 	log := e.logger().With("pair", k.String())
+
+	// A sync of this pair may have finished between the unlocked check and
+	// taking the lock: confirm the source is still not found.
+	srcOwner, srcName, _ := strings.Cut(k.SrcRepo, "/")
+	if _, err := srcP.GetRepo(ctx, srcOwner, srcName); err == nil {
+		log.Debug("engine: reconcile: source exists on re-check under the pair lock")
+		if !opt.DryRun {
+			if err := e.Store.ClearMissing(ctx, k); err != nil {
+				log.Warn("engine: reconcile: clear missing record", "err", err)
+			}
+		}
+		return rep, false
+	} else if !errors.Is(err, forge.ErrNotFound) {
+		log.Warn("engine: reconcile: cannot confirm source deletion; leaving pair alone", "err", err)
+		return rep, false
+	}
 	act := func(format string, args ...any) {
 		rep.Actions = append(rep.Actions, fmt.Sprintf(format, args...))
 	}
@@ -131,20 +187,22 @@ func (e *Engine) reconcileOne(ctx context.Context, k state.PairKey, rs config.Ru
 		return rep, true
 	}
 
-	// Grace period: nothing destructive until the source has been missing
-	// for DeletionGrace since it was first seen missing.
+	// Grace period: nothing destructive until the source has been
+	// continuously missing for DeletionGrace.
 	now := e.now()
 	firstSeen := now
+	gap := missingGap(rs)
 	if opt.DryRun {
-		since, found, err := e.Store.MissingSince(ctx, k)
+		since, last, found, err := e.Store.MissingRecord(ctx, k)
 		if err != nil {
 			rep.Status, rep.Err = state.RunFailed, fmt.Errorf("engine: read missing record: %w", err)
 			return rep, true
 		}
-		if found {
+		// As MarkMissingObserved would: a stale observation restarts the clock.
+		if found && !last.IsZero() && now.Sub(last) <= gap {
 			firstSeen = since
 		}
-	} else if firstSeen, err = e.Store.MarkMissing(ctx, k); err != nil {
+	} else if firstSeen, err = e.Store.MarkMissingObserved(ctx, k, gap); err != nil {
 		rep.Status, rep.Err = state.RunFailed, fmt.Errorf("engine: record missing source: %w", err)
 		return rep, true
 	}
@@ -307,13 +365,28 @@ func (e *Engine) planDeletion(ctx context.Context, k state.PairKey, rs config.Ru
 		return deletionPlan{}, fmt.Errorf("unknown destination forge %q", k.DstForge)
 	}
 	plan := deletionPlan{dstP: dstP}
-	how, owned, err := e.Store.Owned(ctx, k.DstForge, k.DstRepo)
+	rec, owned, err := e.Store.OwnershipOf(ctx, k.DstForge, k.DstRepo)
 	if err != nil {
 		return deletionPlan{}, fmt.Errorf("read ownership of %s: %w", dst, err)
 	}
 	if !owned {
 		plan.kind = planNotOwned
 		return plan, nil
+	}
+	how := rec.How
+	owner, name, _ := strings.Cut(k.DstRepo, "/")
+	repo, err := dstP.GetRepo(ctx, owner, name)
+	gone := errors.Is(err, forge.ErrNotFound)
+	if err != nil && !gone {
+		return deletionPlan{}, fmt.Errorf("get %s: %w", dst, err)
+	}
+	if !gone {
+		if why := e.identityMismatch(rec, k.DstForge, repo); why != "" {
+			// Not the repository gitmirror created or adopted: never
+			// archive or delete it.
+			plan.kind, plan.note = planNotOwned, why
+			return plan, nil
+		}
 	}
 	if rs.OnSourceDeleted == "delete" {
 		del, canDelete := dstP.(forge.RepoDeleter)
@@ -327,13 +400,9 @@ func (e *Engine) planDeletion(ctx context.Context, k state.PairKey, rs config.Ru
 			return plan, nil
 		}
 	}
-	owner, name, _ := strings.Cut(k.DstRepo, "/")
-	repo, err := dstP.GetRepo(ctx, owner, name)
 	switch {
-	case errors.Is(err, forge.ErrNotFound):
+	case gone:
 		plan.kind = planGone
-	case err != nil:
-		return deletionPlan{}, fmt.Errorf("get %s: %w", dst, err)
 	case repo.Archived:
 		plan.kind = planArchived
 	default:

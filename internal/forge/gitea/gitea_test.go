@@ -174,6 +174,26 @@ func TestGetRepoTopicsFallback(t *testing.T) {
 	}
 }
 
+func TestRepoIDMapped(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/user", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, map[string]any{"login": "me"}) })
+	mux.HandleFunc("GET /api/v1/repos/o/n", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, map[string]any{"id": 55, "name": "n", "owner": map[string]any{"login": "o"}, "topics": []string{}})
+	})
+	mux.HandleFunc("POST /api/v1/user/repos", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 201, map[string]any{"id": 56, "name": "c", "owner": map[string]any{"login": "me"}})
+	})
+	mux.HandleFunc("PATCH /api/v1/repos/me/c", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, repoJSON("me", "c")) })
+	srv, _ := serve(t, mux)
+	p := newProv(t, srv.URL)
+	if r, err := p.GetRepo(ctx(), "o", "n"); err != nil || r.ID != 55 {
+		t.Fatalf("GetRepo = %+v, %v; want ID 55", r, err)
+	}
+	if r, err := p.CreateRepo(ctx(), forge.CreateOptions{Owner: "me", Name: "c"}); err != nil || r.ID != 56 {
+		t.Fatalf("CreateRepo = %+v, %v; want ID 56", r, err)
+	}
+}
+
 func TestPathEscapeAndReject(t *testing.T) {
 	var escaped string
 	mux := http.NewServeMux()

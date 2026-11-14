@@ -56,6 +56,39 @@ func TestGetRepoNotFoundAndCaseInsensitive(t *testing.T) {
 	}
 }
 
+func TestRepoIDs(t *testing.T) {
+	p := New(Options{})
+	if err := p.AddRepo(forge.Repo{Owner: "o", Name: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	a1, _ := p.GetRepo(ctx, "o", "a")
+	// Re-adding the same repo (new metadata) keeps its id.
+	if err := p.AddRepo(forge.Repo{Owner: "o", Name: "a", Description: "d"}); err != nil {
+		t.Fatal(err)
+	}
+	a2, _ := p.GetRepo(ctx, "o", "a")
+	created, err := p.CreateRepo(ctx, forge.CreateOptions{Owner: "o", Name: "b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := p.GetRepo(ctx, "o", "b")
+	// Removed and added again: a new id, like a re-created repository.
+	p.RemoveRepo("o", "a")
+	if err := p.AddRepo(forge.Repo{Owner: "o", Name: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	a3, _ := p.GetRepo(ctx, "o", "a")
+	if a1.ID == 0 || a2.ID != a1.ID || created.ID == 0 || b.ID != created.ID || created.ID == a1.ID || a3.ID == a1.ID || a3.ID == created.ID {
+		t.Fatalf("ids: a1 %d a2 %d created %d b %d a3 %d", a1.ID, a2.ID, created.ID, b.ID, a3.ID)
+	}
+	if err := p.AddRepo(forge.Repo{Owner: "o", Name: "c", ID: 999}); err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := p.GetRepo(ctx, "o", "c"); c.ID != 999 {
+		t.Fatalf("explicit id = %d", c.ID)
+	}
+}
+
 func TestListReposSortedAndUnknownOwner(t *testing.T) {
 	p := New(Options{})
 	p.AddRepo(forge.Repo{Owner: "o", Name: "zeta"})
@@ -163,7 +196,7 @@ func TestUpdateRepoSettings(t *testing.T) {
 	}
 	topics[0] = "mutated"
 	r, _ = p.GetRepo(ctx, "o", "n")
-	want := forge.Repo{Owner: "o", Name: "n", Description: "new", Homepage: home, Topics: []string{"a", "b"}, DefaultBranch: "main", Private: true, Archived: true}
+	want := forge.Repo{ID: r.ID, Owner: "o", Name: "n", Description: "new", Homepage: home, Topics: []string{"a", "b"}, DefaultBranch: "main", Private: true, Archived: true}
 	if !reflect.DeepEqual(*r, want) {
 		t.Fatalf("got %+v want %+v", *r, want)
 	}

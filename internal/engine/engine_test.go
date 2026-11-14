@@ -339,8 +339,9 @@ func TestReleasesMirrored(t *testing.T) {
 	if a := assetByName(d1, "a.bin"); a == nil || !bytes.Equal(h.dst.AssetBytes("mirrors", "proj", d1.ID, a.ID), aData2) {
 		t.Fatal("a.bin not replaced")
 	}
-	if assetByName(d1, "extra.txt") != nil {
-		t.Fatal("extra dst asset not removed")
+	// extra.txt was attached by hand (not in the asset map): never deleted.
+	if assetByName(d1, "extra.txt") == nil {
+		t.Fatal("hand-uploaded dst asset removed")
 	}
 	if assetByName(d1, "b.bin") == nil {
 		t.Fatal("unchanged asset b.bin removed")
