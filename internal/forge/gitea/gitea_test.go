@@ -11,10 +11,12 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"gitmirror/internal/forge"
 )
@@ -137,6 +139,9 @@ func TestSubPathGetRepoMapping(t *testing.T) {
 			"default_branch": "dev", "private": true, "archived": true, "fork": true,
 			"empty": true, "has_wiki": true,
 		})
+	})
+	mux.HandleFunc("GET /gitea/api/v1/repos/my-org.x/re-po.y/wiki/pages", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, []map[string]any{{"title": "Home"}})
 	})
 	srv, _ := serve(t, mux)
 	p := newProv(t, srv.URL+"/gitea")
@@ -691,7 +696,8 @@ func TestEnsureOrg(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/user", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, map[string]any{"login": "me"}) })
 	mux.HandleFunc("GET /api/v1/orgs/{o}", func(w http.ResponseWriter, r *http.Request) {
-		if r.PathValue("o") == "exists" {
+		// "race" is created concurrently: visible once our POST was refused.
+		if o := r.PathValue("o"); o == "exists" || (o == "race" && slices.Contains(created, "race")) {
 			writeJSON(w, 200, map[string]any{})
 			return
 		}
@@ -705,7 +711,7 @@ func TestEnsureOrg(t *testing.T) {
 		name := b["username"].(string)
 		created = append(created, name)
 		if name == "race" {
-			msg(w, 422, "Organization already exists [name: race]")
+			msg(w, 422, "user already exists [name: race]")
 			return
 		}
 		if name == "bad" {
@@ -827,5 +833,145 @@ func TestDeleteRepo(t *testing.T) {
 	}
 	if err := p.DeleteRepo(ctx(), "o", "a/b"); err == nil {
 		t.Error("invalid segment accepted")
+	}
+}
+
+// Gitea reports has_wiki:true for a repository whose wiki was never
+// initialised, and answers 404 on its page list (and refuses git on
+// <repo>.wiki.git) until a first page exists.
+func TestGetRepoWikiNotInitialised(t *testing.T) {
+	mux := http.NewServeMux()
+	for _, n := range []string{"none", "some", "off", "broken"} {
+		mux.HandleFunc("GET /api/v1/repos/o/"+n, func(w http.ResponseWriter, r *http.Request) {
+			j := repoJSON("o", n)
+			j["has_wiki"] = n != "off"
+			writeJSON(w, 200, j)
+		})
+	}
+	mux.HandleFunc("GET /api/v1/repos/o/none/wiki/pages", func(w http.ResponseWriter, r *http.Request) {
+		msg(w, 404, "no such file or directory")
+	})
+	mux.HandleFunc("GET /api/v1/repos/o/some/wiki/pages", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("limit") != "1" {
+			t.Errorf("wiki probe query %q", r.URL.RawQuery)
+		}
+		writeJSON(w, 200, []map[string]any{{"title": "Home"}})
+	})
+	mux.HandleFunc("GET /api/v1/repos/o/broken/wiki/pages", func(w http.ResponseWriter, r *http.Request) {
+		msg(w, 500, "boom")
+	})
+	srv, c := serve(t, mux)
+	p := newProv(t, srv.URL)
+	for n, want := range map[string]bool{"none": false, "some": true, "off": false, "broken": true} {
+		r, err := p.GetRepo(ctx(), "o", n)
+		if err != nil {
+			t.Fatalf("%s: %v", n, err)
+		}
+		if r.HasWiki != want {
+			t.Errorf("%s: HasWiki = %v, want %v", n, r.HasWiki, want)
+		}
+	}
+	for _, call := range c.all() {
+		if call == "GET /api/v1/repos/o/off/wiki/pages" {
+			t.Error("probed the wiki of a repo with the wiki disabled")
+		}
+	}
+}
+
+func TestEnsureWiki(t *testing.T) {
+	var pages []map[string]any
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/repos/o/n/wiki/pages", func(w http.ResponseWriter, r *http.Request) {
+		if len(pages) == 0 {
+			msg(w, 404, "no such file or directory")
+			return
+		}
+		writeJSON(w, 200, pages)
+	})
+	mux.HandleFunc("POST /api/v1/repos/o/n/wiki/new", func(w http.ResponseWriter, r *http.Request) {
+		b := readBody(t, r)
+		if b["title"] != "Home" || b["content_base64"] == "" {
+			t.Errorf("body %v", b)
+		}
+		pages = append(pages, b)
+		writeJSON(w, 201, map[string]any{"title": "Home"})
+	})
+	mux.HandleFunc("GET /api/v1/repos/o/off/wiki/pages", func(w http.ResponseWriter, r *http.Request) { msg(w, 404, "not found") })
+	mux.HandleFunc("POST /api/v1/repos/o/off/wiki/new", func(w http.ResponseWriter, r *http.Request) { msg(w, 404, "not found") })
+	srv, c := serve(t, mux)
+	p := newProv(t, srv.URL)
+	if err := p.EnsureWiki(ctx(), "o", "n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.EnsureWiki(ctx(), "o", "n"); err != nil {
+		t.Fatal(err)
+	}
+	if len(pages) != 1 {
+		t.Errorf("created %d pages, want 1 (second call must be a no-op)", len(pages))
+	}
+	want := "GET /api/v1/repos/o/n/wiki/pages,POST /api/v1/repos/o/n/wiki/new,GET /api/v1/repos/o/n/wiki/pages"
+	if got := strings.Join(c.all(), ","); got != want {
+		t.Errorf("calls %s", got)
+	}
+	if err := p.EnsureWiki(ctx(), "o", "off"); err == nil || !strings.Contains(err.Error(), "wiki enabled") {
+		t.Errorf("disabled wiki: %v", err)
+	}
+}
+
+// POST /orgs answers 422 "user already exists" for a user name too; that
+// must not count as an existing organisation.
+func TestEnsureOrgNameTakenByUser(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/user", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, map[string]any{"login": "me"}) })
+	mux.HandleFunc("GET /api/v1/orgs/carol", func(w http.ResponseWriter, r *http.Request) { msg(w, 404, "org does not exist") })
+	mux.HandleFunc("POST /api/v1/orgs", func(w http.ResponseWriter, r *http.Request) { msg(w, 422, "user already exists [name: carol]") })
+	srv, _ := serve(t, mux)
+	err := newProv(t, srv.URL).EnsureOrg(ctx(), "carol")
+	if err == nil || !strings.Contains(err.Error(), "existing user") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+// Right after the first push Gitea may still flag the repo empty and
+// refuse a release with 422 "repo is empty".
+func TestCreateReleaseWaitsForPushedRepo(t *testing.T) {
+	oldWait, oldPoll := emptyWait, emptyPoll
+	emptyWait, emptyPoll = 2*time.Second, time.Millisecond
+	t.Cleanup(func() { emptyWait, emptyPoll = oldWait, oldPoll })
+
+	gets, posts := 0, 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/repos/o/{n}", func(w http.ResponseWriter, r *http.Request) {
+		gets++
+		j := repoJSON("o", r.PathValue("n"))
+		j["empty"] = r.PathValue("n") == "stuck" || gets < 3
+		writeJSON(w, 200, j)
+	})
+	mux.HandleFunc("POST /api/v1/repos/o/{n}/releases", func(w http.ResponseWriter, r *http.Request) {
+		posts++
+		if r.PathValue("n") == "stuck" || gets < 3 {
+			msg(w, 422, "repo is empty")
+			return
+		}
+		writeJSON(w, 201, map[string]any{"id": 7, "tag_name": "v1"})
+	})
+	srv, _ := serve(t, mux)
+	p := newProv(t, srv.URL)
+	rel, err := p.CreateRelease(ctx(), "o", "n", forge.Release{Tag: "v1"})
+	if err != nil || rel.ID != 7 {
+		t.Fatalf("%+v %v", rel, err)
+	}
+	if posts != 2 || gets != 3 {
+		t.Errorf("posts=%d gets=%d, want 2 and 3", posts, gets)
+	}
+
+	emptyWait = 50 * time.Millisecond
+	posts = 0
+	_, err = p.CreateRelease(ctx(), "o", "stuck", forge.Release{Tag: "v1"})
+	if err == nil || !strings.Contains(err.Error(), "repo is empty") {
+		t.Fatalf("stuck: %v", err)
+	}
+	if posts != 1 {
+		t.Errorf("stuck: %d posts, want 1", posts)
 	}
 }

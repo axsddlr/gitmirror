@@ -10,6 +10,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -21,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"gitmirror/internal/forge"
 )
@@ -308,6 +310,14 @@ func repos(in []apiRepo) []forge.Repo {
 }
 
 // GetRepo implements forge.Provider.
+//
+// HasWiki is true only when the wiki is enabled and its git repository
+// exists. Gitea reports has_wiki:true for every new repository, but until
+// the first page is created the wiki repository does not exist and every
+// git operation on <repo>.wiki.git fails with "wiki doesn't exist, please
+// initialize the wiki by creating a new page first" (verified on Gitea
+// 28.3). Reporting such a wiki as present would make every mirror of a
+// wiki-less repository fail its wiki step.
 func (p *Provider) GetRepo(ctx context.Context, owner, name string) (*forge.Repo, error) {
 	rp, err := repoPath(owner, name)
 	if err != nil {
@@ -326,8 +336,59 @@ func (p *Provider) GetRepo(ctx context.Context, owner, name string) (*forge.Repo
 		}
 		a.Topics = t.Topics
 	}
+	if a.HasWiki {
+		// On an unexpected error keep has_wiki as reported; the wiki step
+		// then surfaces the real problem.
+		if exists, err := p.wikiExists(ctx, rp); err == nil {
+			a.HasWiki = exists
+		}
+	}
 	r := a.repo()
 	return &r, nil
+}
+
+// wikiExists reports whether the wiki git repository of rp exists. Gitea
+// answers 404 on the page list while the wiki has never been initialised.
+func (p *Provider) wikiExists(ctx context.Context, rp string) (bool, error) {
+	q := url.Values{"page": {"1"}, "limit": {"1"}}
+	_, err := p.do(ctx, http.MethodGet, rp+"/wiki/pages", q, nil, nil)
+	if errors.Is(err, forge.ErrNotFound) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// wikiPlaceholder is the page EnsureWiki creates; the first wiki push
+// replaces it with the source wiki's history.
+const wikiPlaceholder = "This wiki is a mirror maintained by gitmirror.\n"
+
+// EnsureWiki initialises the wiki of owner/name when its git repository
+// does not exist yet, by creating one placeholder page through the API.
+// Gitea refuses git pushes to a wiki that was never initialised, so a
+// mirror must call this before its first wiki push. The placeholder commit
+// is overwritten by that (forced) push. It is a no-op for an existing wiki.
+func (p *Provider) EnsureWiki(ctx context.Context, owner, name string) error {
+	rp, err := repoPath(owner, name)
+	if err != nil {
+		return err
+	}
+	exists, err := p.wikiExists(ctx, rp)
+	if err != nil || exists {
+		return err
+	}
+	body := map[string]any{
+		"title":          "Home",
+		"content_base64": base64.StdEncoding.EncodeToString([]byte(wikiPlaceholder)),
+		"message":        "Initialise wiki for mirroring",
+	}
+	if _, err := p.do(ctx, http.MethodPost, rp+"/wiki/new", nil, body, nil); err != nil {
+		// Someone else may have initialised it concurrently.
+		if exists, cerr := p.wikiExists(ctx, rp); cerr == nil && exists {
+			return nil
+		}
+		return fmt.Errorf("gitea: initialise wiki of %s/%s (is the wiki enabled?): %w", owner, name, err)
+	}
+	return nil
 }
 
 // ListRepos implements forge.Provider.
@@ -487,7 +548,17 @@ func (p *Provider) EnsureOrg(ctx context.Context, name string) error {
 	_, err = p.do(ctx, http.MethodPost, "/orgs", nil, map[string]any{"username": name, "visibility": "private"}, nil)
 	var ae *apiError
 	if errors.As(err, &ae) && ae.status == http.StatusUnprocessableEntity && strings.Contains(strings.ToLower(ae.message), "already exist") {
-		return nil
+		// Gitea answers "user already exists [name: x]" both when an
+		// organisation was created concurrently and when x is a user
+		// account, so look again: only an organisation counts.
+		_, gerr := p.do(ctx, http.MethodGet, "/orgs/"+n, nil, nil, nil)
+		if gerr == nil {
+			return nil
+		}
+		if errors.Is(gerr, forge.ErrNotFound) {
+			return fmt.Errorf("gitea: %q is an existing user, not an organisation; mirror into it only with that user's token: %w", name, err)
+		}
+		return gerr
 	}
 	return err
 }
@@ -552,11 +623,55 @@ func (p *Provider) CreateRelease(ctx context.Context, owner, name string, r forg
 		return nil, err
 	}
 	var a apiRelease
-	if _, err := p.do(ctx, http.MethodPost, rp+"/releases", nil, releaseBody(r), &a); err != nil {
+	_, err = p.do(ctx, http.MethodPost, rp+"/releases", nil, releaseBody(r), &a)
+	if isEmptyRepo(err) {
+		// Gitea clears a repository's "empty" flag asynchronously after a
+		// push, so a release created right after the first push into a new
+		// repository is refused with 422 "repo is empty" (seen on Gitea
+		// 28.3). Nothing was created, so wait for the flag and retry once.
+		if werr := p.waitNotEmpty(ctx, rp); werr != nil {
+			return nil, fmt.Errorf("%w (waiting for the pushed refs to be indexed: %v)", err, werr)
+		}
+		_, err = p.do(ctx, http.MethodPost, rp+"/releases", nil, releaseBody(r), &a)
+	}
+	if err != nil {
 		return nil, err
 	}
 	out := p.release(a)
 	return &out, nil
+}
+
+// emptyWait bounds waitNotEmpty; emptyPoll is its polling interval.
+var (
+	emptyWait = 30 * time.Second
+	emptyPoll = 250 * time.Millisecond
+)
+
+func isEmptyRepo(err error) bool {
+	var ae *apiError
+	return errors.As(err, &ae) && ae.status == http.StatusUnprocessableEntity && strings.Contains(strings.ToLower(ae.message), "repo is empty")
+}
+
+// waitNotEmpty polls the repository until Gitea no longer reports it empty.
+func (p *Provider) waitNotEmpty(ctx context.Context, rp string) error {
+	ctx, cancel := context.WithTimeout(ctx, emptyWait)
+	defer cancel()
+	for {
+		var a apiRepo
+		if _, err := p.do(ctx, http.MethodGet, rp, nil, nil, &a); err != nil {
+			return err
+		}
+		if !a.Empty {
+			return nil
+		}
+		t := time.NewTimer(emptyPoll)
+		select {
+		case <-ctx.Done():
+			t.Stop()
+			return fmt.Errorf("repository still empty: %w", ctx.Err())
+		case <-t.C:
+		}
+	}
 }
 
 // UpdateRelease implements forge.ReleaseProvider.
