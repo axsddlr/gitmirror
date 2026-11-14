@@ -123,6 +123,13 @@ type WikiProvider interface {
 	WikiGitURL(owner, name string) string
 }
 
+// WikiInitializer is implemented by platforms that refuse git access to a
+// wiki until it has been created through the web UI or API (Gitea, Forgejo).
+// EnsureWiki is a no-op when the wiki already exists.
+type WikiInitializer interface {
+	EnsureWiki(ctx context.Context, owner, name string) error
+}
+
 // StarProvider lists the repositories a user has starred.
 type StarProvider interface {
 	ListStarred(ctx context.Context, user string) ([]Repo, error)

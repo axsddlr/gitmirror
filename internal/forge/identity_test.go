@@ -13,3 +13,5 @@ var (
 	_ forge.Identity = (*gitea.Provider)(nil)
 	_ forge.Identity = (*fake.Provider)(nil)
 )
+
+var _ forge.WikiInitializer = (*gitea.Provider)(nil)
