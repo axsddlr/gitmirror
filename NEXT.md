@@ -10,9 +10,19 @@ Branch: `build/foundations` (local only, nothing pushed).
 - M2 git engine: done and verified (`internal/gitx`).
 - M3 providers: done and verified (`httpx`, `github`, `gitea`, incl. RepoDeleter).
 - M4: done and verified (`internal/resolve`, `internal/engine`, deletion grace period, gitx raw-stdout fix).
-- M5 CLI: done and verified. Real-Gitea integration tests in progress (`internal/integration`, build tag `integration`).
-- M6 releases + wiki: built into the engine (M4); real-server proof comes from the integration tests.
-- M7 daemon: done and verified (`internal/server`, `serve`, OS-level state-dir lock, read-only `plan`).
+- M5 CLI: done and verified. Real-Gitea integration suite (`internal/integration`, build tag `integration`): 13 scenarios against two Gitea 28.3.0 containers, green.
+- M6 releases + wiki: done; proven against real Gitea (assets byte-identical, wiki auto-initialised).
+- M7 daemon: done and verified (`internal/server`, `serve`, OS-level state-dir lock, read-only `plan`, metrics on a separate loopback listener).
+- M8 packaging: done (Dockerfile verified: non-root, healthy, graceful stop; goreleaser check + snapshot build; compose; systemd; README with verified token permissions; config reference). Not run: CI workflows, `deploy/Dockerfile.goreleaser`, the systemd units.
+- M9 hardening + independent review (security, data-loss, concurrency lenses): all P1/P2 findings fixed and committed through `052a162`.
+
+## Before a first release (needs the user)
+
+- Add a LICENSE (goreleaser has `- LICENSE` commented out).
+- Replace the `OWNER` placeholders (goreleaser, compose, systemd, README).
+- Push to a remote so CI runs `-race`, golangci-lint (no `.golangci` config yet) and govulncheck — none of these have run.
+- Optional live smoke test against real GitHub with a throwaway repo and token.
+- No GitHub-side integration test exists (GitHub provider is covered by httptest fakes only).
 
 ## Decisions
 
@@ -26,13 +36,10 @@ Branch: `build/foundations` (local only, nothing pushed).
 - `${VAR}` inside YAML flow maps must be quoted; README examples must show `token: "${GITHUB_TOKEN}"`.
 - gitx in-process lock map is never pruned (one entry per pair; fine at expected scale).
 - Scheduled interval counts from enqueue time, not job start (fine with coalescing; document).
-- Review batch 2 (data-loss + concurrency) implemented, uncommitted: reconcile skips stale pairs whose
-  destination a live pair targets and re-checks the source under the pair lock; ownership bound to
-  destination repo id + forge URL (migration 0006, TOFU backfill); release tag-match only for created
-  destinations or `adopt`, only mapped assets deleted; per-asset idle (2m) / total timeouts; deletion
-  grace restarts after an observation gap > max(2 x interval, 1h); persisted "unarchived" marker;
-  `allow_publish` for adopted destinations. Integration subtest `ReplacedDestination` added.
-- Follow-ups from batch 2 (not done):
+- `serve` cannot bypass the mass-deletion guard; a tripped pair keeps aborting until `sync --allow-prune` or raised limits.
+- git no longer follows any HTTP redirect, so a renamed repo whose URL redirects fails until the config/API name catches up.
+- The wiki has no mass-deletion guard (only the empty-source guard).
+- Known limitations (P3, accepted for now):
   - Ownership is still keyed by forge *name*: renaming a forge entry in the config orphans ownership
     (fails safe: destinations become unowned and need `adopt`).
   - TOFU backfill trusts whatever repository exists on the first run after upgrading; a repo replaced
