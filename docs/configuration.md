@@ -21,7 +21,7 @@ Rules of the loader (`internal/config`):
 
 | Key | Type | Default | Validation | Description |
 |---|---|---|---|---|
-| `state_dir` | string | `./data` | none | Directory for the sqlite database, the bare git cache and the lock file (`gitmirror.lock`). Relative paths resolve against the working directory. Use `/data` in the Docker image, `/var/lib/gitmirror` under systemd. |
+| `state_dir` | string | `./data` | none | Directory for the sqlite database, the bare git cache and the lock file (`gitmirror.lock`). Relative paths resolve against the working directory. The environment variable `GITMIRROR_STATE_DIR`, when set and non-empty, overrides this (precedence: env > config > default `./data`); the Docker image sets it to `/data`. Use `/var/lib/gitmirror` under systemd. |
 | `concurrency` | int | `4` (also when `0` or omitted) | 1..64 | Number of repo pairs processed in parallel. |
 | `forges` | map name -> forge | none | names match `^[a-z0-9][a-z0-9_-]*$` | Forge connections referenced by rules. |
 | `defaults` | object | see below | see below | Settings every rule inherits. |
@@ -123,6 +123,7 @@ dropped pair as a deleted source.
 | Variable | Used for |
 |---|---|
 | `GITMIRROR_CONFIG` | Default for `-c/--config`. |
+| `GITMIRROR_STATE_DIR` | Overrides `state_dir` when non-empty (env > config > default `./data`). Applied in `config.Parse`/`config.Load`. Set to `/data` in the Docker image. |
 | any `${VAR}` named in the config | Interpolation. |
 
 Git is run with a sanitised environment (`GIT_CONFIG*`, `GIT_DIR`, `GIT_ASKPASS`, tracing

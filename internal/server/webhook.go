@@ -45,7 +45,19 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxWebhookBody))
+	// Bound unauthenticated memory: the body is read before the signature is
+	// checked, so limit how many reads run at once and shed the rest.
+	select {
+	case s.whSem <- struct{}{}:
+		defer func() { <-s.whSem }()
+	default:
+		count(whBusy)
+		w.Header().Set("Retry-After", "1")
+		text(w, http.StatusServiceUnavailable, "busy")
+		return
+	}
+
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, s.MaxWebhookBody))
 	if err != nil {
 		var mbe *http.MaxBytesError
 		if errors.As(err, &mbe) {

@@ -15,6 +15,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -320,8 +322,17 @@ func Parse(data []byte, env func(string) (string, bool), readFile func(string) (
 	if err := yaml.UnmarshalWithOptions(data, &c, yaml.Strict()); err != nil {
 		return nil, decodeError(err)
 	}
+	raw := rawSecrets(&c)
 	if errs := interpolate(&c, env); len(errs) > 0 {
 		return nil, errors.Join(errs...)
+	}
+	if errs := emptyInterpolated(&c, raw); len(errs) > 0 {
+		return nil, errors.Join(errs...)
+	}
+	// GITMIRROR_STATE_DIR (when set and non-empty) overrides state_dir;
+	// precedence is env > config file > default "./data".
+	if v, ok := env(stateDirEnv); ok && v != "" {
+		c.StateDir = v
 	}
 	c.applyDefaults()
 	errs := c.resolveSecrets(readFile)
@@ -332,6 +343,38 @@ func Parse(data []byte, env func(string) (string, bool), readFile func(string) (
 		return nil, errors.Join(errs...)
 	}
 	return &c, nil
+}
+
+// stateDirEnv is the environment variable that overrides state_dir.
+const stateDirEnv = "GITMIRROR_STATE_DIR"
+
+var varRef = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)`)
+
+func secretFields(c *Config) map[string]string {
+	m := map[string]string{"server.webhook_secret": c.Server.WebhookSecret}
+	for name, f := range c.Forges {
+		m["forges."+name+".token"] = f.Token
+	}
+	return m
+}
+
+// rawSecrets returns the pre-interpolation secret values keyed by field path.
+func rawSecrets(c *Config) map[string]string { return secretFields(c) }
+
+// emptyInterpolated reports secrets that referenced ${VAR} but resolved to an
+// empty or whitespace-only value. Only the variable name is reported.
+func emptyInterpolated(c *Config, raw map[string]string) []error {
+	cur := secretFields(c)
+	var errs []error
+	for path, orig := range raw {
+		m := varRef.FindStringSubmatch(strings.ReplaceAll(orig, "$${", ""))
+		if m == nil || strings.TrimSpace(cur[path]) != "" {
+			continue
+		}
+		errs = append(errs, fmt.Errorf("%s: ${%s} resolved to an empty value", path, m[1]))
+	}
+	sort.Slice(errs, func(i, j int) bool { return errs[i].Error() < errs[j].Error() })
+	return errs
 }
 
 // decodeError reduces a YAML error to its message and position; the

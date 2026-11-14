@@ -42,7 +42,8 @@ const (
 	httpShutdown    = 10 * time.Second
 	pruneEvery      = 24 * time.Hour
 	pruneKeep       = 100
-	maxWebhookBody  = 25 << 20
+	maxWebhookBody  = 25 << 20 // default Server.MaxWebhookBody (GitHub's payload limit)
+	maxWebhooks     = 8        // default Server.MaxConcurrentWebhooks
 	defaultInterval = time.Hour
 )
 
@@ -70,6 +71,13 @@ type Server struct {
 	// InitialDelay is the wait before each rule's first scheduled run; 0
 	// staggers the rules evenly over 0..min(interval, 30s).
 	InitialDelay time.Duration
+	// MaxWebhookBody is the largest accepted webhook body in bytes; 0 means
+	// 25 MiB (GitHub's payload limit).
+	MaxWebhookBody int64
+	// MaxConcurrentWebhooks bounds webhook requests whose body is being read
+	// (before signature verification); further requests get 503 with
+	// Retry-After: 1. 0 means 8.
+	MaxConcurrentWebhooks int
 
 	// onJobDone, when set (tests), is called after every job.
 	onJobDone func(lane string, j Job)
@@ -79,6 +87,7 @@ type Server struct {
 	handler http.Handler
 	rng     *rand.Rand // scheduler goroutine only
 	stop    chan struct{}
+	whSem   chan struct{}
 
 	ready    atomic.Bool
 	stopping atomic.Bool
@@ -115,6 +124,13 @@ func (s *Server) init() {
 		s.rng = rand.New(rand.NewPCG(uint64(now), uint64(now>>1)^0x9e3779b97f4a7c15))
 		s.m = newMetrics()
 		s.stop = make(chan struct{})
+		if s.MaxConcurrentWebhooks <= 0 {
+			s.MaxConcurrentWebhooks = maxWebhooks
+		}
+		if s.MaxWebhookBody <= 0 {
+			s.MaxWebhookBody = maxWebhookBody
+		}
+		s.whSem = make(chan struct{}, s.MaxConcurrentWebhooks)
 		s.lastResolve = map[string][]resolve.Pair{}
 		s.schedWake = make(chan struct{}, 1)
 		s.whPending = map[string]*whItem{}

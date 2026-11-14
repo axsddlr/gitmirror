@@ -19,6 +19,7 @@ const (
 	whBadRequest   = "bad_request"
 	whTooLarge     = "too_large"
 	whDisabled     = "disabled"
+	whBusy         = "busy"
 )
 
 // metrics are the server's Prometheus collectors on a private registry.

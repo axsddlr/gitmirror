@@ -14,7 +14,9 @@
 
 # Directory for the sqlite state database, the git cache and the lock file.
 # Default: ./data   (relative to the working directory).
-# Docker image: use /data. systemd unit: use /var/lib/gitmirror.
+# The env var GITMIRROR_STATE_DIR, when non-empty, overrides this value
+# (env > config > default). The Docker image sets it to /data.
+# systemd unit: use /var/lib/gitmirror.
 state_dir: ./data
 
 # Rules/repos processed in parallel. Range 1..64. Default: 4.

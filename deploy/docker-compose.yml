@@ -3,11 +3,10 @@
 #   mkdir -p secrets && printf '%s' "<github token>" > secrets/github_token
 #   printf '%s' "<gitea token>"   > secrets/gitea_token
 #   printf '%s' "<webhook secret>" > secrets/webhook_secret
-#   cp ../config.example.yaml config.yaml    # edit: state_dir: /data, token_file entries (see below)
+#   cp ../config.example.yaml config.yaml    # edit: token_file entries (see below)
 #   docker compose up -d
 #
 # In config.yaml refer to the secrets by path instead of embedding tokens:
-#   state_dir: /data
 #   forges:
 #     github: { type: github, token_file: /run/secrets/github_token }
 #     gitea:  { type: gitea, url: "https://git.example.com", token_file: /run/secrets/gitea_token }
@@ -24,6 +23,8 @@ services:
     #   args: { VERSION: dev }
     restart: unless-stopped
     command: ["serve"]
+    environment:
+      GITMIRROR_STATE_DIR: /data   # also set in the image; overrides state_dir in config.yaml
     ports:
       - "8080:8080"          # webhooks, /healthz, /readyz, /metrics. Put a TLS reverse proxy in front.
     volumes:

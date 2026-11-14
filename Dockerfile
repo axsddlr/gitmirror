@@ -34,10 +34,11 @@ RUN apk add --no-cache git git-lfs ca-certificates tini \
 COPY --from=build /out/gitmirror /usr/local/bin/gitmirror
 
 # HOME=/data: git and git-lfs write their config/cache under $HOME.
-# The config file is expected at /config/config.yaml (mount it read-only) and
-# should set state_dir: /data (the built-in default ./data would resolve to /data/data).
+# The config file is expected at /config/config.yaml (mount it read-only).
+# GITMIRROR_STATE_DIR overrides state_dir (the default ./data would be /data/data).
 ENV HOME=/data \
-    GITMIRROR_CONFIG=/config/config.yaml
+    GITMIRROR_CONFIG=/config/config.yaml \
+    GITMIRROR_STATE_DIR=/data
 
 USER gitmirror:gitmirror
 WORKDIR /data

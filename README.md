@@ -78,8 +78,8 @@ docker run -d --name gitmirror --restart unless-stopped \
 
 The image is Alpine-based, runs as uid/gid `10001` (user `gitmirror`), contains `git`, `git-lfs`
 and `tini`, uses `/data` as `HOME` and working directory, and reads `/config/config.yaml`
-(`GITMIRROR_CONFIG`). **Set `state_dir: /data` in your config**: the built-in default `./data` would
-resolve to `/data/data`. A bind-mounted `/data` must be writable by uid 10001. `--stop-timeout 660`
+(`GITMIRROR_CONFIG`). The image sets `GITMIRROR_STATE_DIR=/data`, which overrides
+`state_dir` (precedence: env > config file > default `./data`), so no `state_dir` setting is needed. A bind-mounted `/data` must be writable by uid 10001. `--stop-timeout 660`
 lets running syncs finish after `docker stop` (Docker's default is 10 s; `serve` allows 10 minutes).
 The image has a `HEALTHCHECK` on `/healthz`. Other commands work too:
 `docker run --rm ... gitmirror plan`.
@@ -187,7 +187,7 @@ Other events are acknowledged and ignored. A delivery for a repo that a rule alr
 triggers a targeted sync of that repo (debounced 5 s); a delivery for an unknown repo of a rule's
 owner (or on a forge with a `starred_by` rule) triggers a full rule sync, which picks up new repositories.
 Responses: `202` accepted, `204` ignored event, `401` bad signature, `404` unknown forge or webhooks
-disabled, `413` body over 25 MiB, `503` shutting down. Webhooks are optional; the scheduler alone keeps
+disabled, `413` body over 25 MiB, `503` shutting down or busy (more than 8 webhook bodies being read at once; `Retry-After: 1`). Webhooks are optional; the scheduler alone keeps
 everything in sync.
 
 ## Endpoints and metrics
@@ -208,7 +208,7 @@ everything in sync.
 | `gitmirror_pair_last_success_timestamp_seconds` | gauge | `rule`, `src`, `dst` | Unix time of the pair's last ok or partial run (0 = never). |
 | `gitmirror_pair_consecutive_failures` | gauge | `rule`, `src`, `dst` | Failed or aborted runs since the last success. |
 | `gitmirror_queue_depth` | gauge | `lane` | Jobs waiting in the `scheduled` or `webhook` lane. |
-| `gitmirror_webhooks_total` | counter | `forge`, `result` | Deliveries by result (`accepted`, `ignored`, `unauthorized`, `bad_request`, `too_large`, `disabled`). |
+| `gitmirror_webhooks_total` | counter | `forge`, `result` | Deliveries by result (`accepted`, `ignored`, `unauthorized`, `bad_request`, `too_large`, `disabled`, `busy`). |
 | `gitmirror_rule_errors_total` | counter | `rule` | Rule-level errors (listing failures, safety drops, failed jobs). |
 | `gitmirror_forge_rate_limit_remaining` | gauge | `forge` | Remaining API quota, when the forge reports one. |
 
@@ -266,8 +266,8 @@ Not yet confirmed: whether GitHub rejects a push that touches `.github/workflows
   Docker image) or remove `lfs` from `include`. `gitmirror validate` reports the versions it finds.
 * **"source has no refs but previously had N; refusing to prune destination".** The empty-source guard
   tripped (outage, lost access or a truly emptied repo). Investigate; the destination was not touched.
-* **"one of token or token_file is required"** although you set `token: "${VAR}"`: the variable is
-  defined but empty.
+* **`forges.<name>.token: ${VAR} resolved to an empty value`** (same for `server.webhook_secret`): the
+  variable is defined but empty or whitespace. Set it, or use `token_file`.
 * **`state dir is locked`.** Another gitmirror (a running `serve`, or a timer-triggered `sync`) holds
   the state directory. Use only one, or pass `--lock-timeout`.
 * **Permission denied on `/data` in Docker.** The container user is uid 10001; chown the bind mount or
