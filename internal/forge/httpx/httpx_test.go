@@ -68,8 +68,8 @@ func TestPOSTNeverRetried(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != 503 || hits != 1 || len(h.sleeps) != 0 {
-		t.Fatalf("status=%d hits=%d sleeps=%v", resp.StatusCode, hits, h.sleeps)
+	if resp.StatusCode != 503 || atomic.LoadInt32(&hits) != 1 || len(h.sleeps) != 0 {
+		t.Fatalf("status=%d hits=%d sleeps=%v", resp.StatusCode, atomic.LoadInt32(&hits), h.sleeps)
 	}
 }
 
@@ -83,8 +83,8 @@ func TestPATCHNeverRetried(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
-	if hits != 1 {
-		t.Fatalf("hits=%d", hits)
+	if atomic.LoadInt32(&hits) != 1 {
+		t.Fatalf("hits=%d", atomic.LoadInt32(&hits))
 	}
 }
 
@@ -99,8 +99,8 @@ func TestWithIdempotentRetriesPATCH(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
-	if resp.StatusCode != 200 || hits != 2 {
-		t.Fatalf("status=%d hits=%d", resp.StatusCode, hits)
+	if resp.StatusCode != 200 || atomic.LoadInt32(&hits) != 2 {
+		t.Fatalf("status=%d hits=%d", resp.StatusCode, atomic.LoadInt32(&hits))
 	}
 }
 
@@ -116,8 +116,8 @@ func TestRetryableMethodsRetry(t *testing.T) {
 				t.Fatal(err)
 			}
 			resp.Body.Close()
-			if resp.StatusCode != 200 || hits != 2 {
-				t.Fatalf("status=%d hits=%d", resp.StatusCode, hits)
+			if resp.StatusCode != 200 || atomic.LoadInt32(&hits) != 2 {
+				t.Fatalf("status=%d hits=%d", resp.StatusCode, atomic.LoadInt32(&hits))
 			}
 		})
 	}
@@ -135,8 +135,8 @@ func TestRetryStatuses(t *testing.T) {
 				t.Fatal(err)
 			}
 			resp.Body.Close()
-			if resp.StatusCode != 200 || hits != 2 {
-				t.Fatalf("status=%d hits=%d", resp.StatusCode, hits)
+			if resp.StatusCode != 200 || atomic.LoadInt32(&hits) != 2 {
+				t.Fatalf("status=%d hits=%d", resp.StatusCode, atomic.LoadInt32(&hits))
 			}
 		})
 	}
@@ -152,8 +152,8 @@ func TestNonRetryableStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
-	if resp.StatusCode != 500 || hits != 1 {
-		t.Fatalf("status=%d hits=%d", resp.StatusCode, hits)
+	if resp.StatusCode != 500 || atomic.LoadInt32(&hits) != 1 {
+		t.Fatalf("status=%d hits=%d", resp.StatusCode, atomic.LoadInt32(&hits))
 	}
 }
 
@@ -167,8 +167,8 @@ func TestPlain403NotRetried(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
-	if resp.StatusCode != 403 || hits != 1 {
-		t.Fatalf("status=%d hits=%d", resp.StatusCode, hits)
+	if resp.StatusCode != 403 || atomic.LoadInt32(&hits) != 1 {
+		t.Fatalf("status=%d hits=%d", resp.StatusCode, atomic.LoadInt32(&hits))
 	}
 }
 
@@ -182,8 +182,8 @@ func TestRetryAfter403Retried(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
-	if hits != 2 || len(h.sleeps) != 1 || h.sleeps[0] != 3*time.Second {
-		t.Fatalf("hits=%d sleeps=%v", hits, h.sleeps)
+	if atomic.LoadInt32(&hits) != 2 || len(h.sleeps) != 1 || h.sleeps[0] != 3*time.Second {
+		t.Fatalf("hits=%d sleeps=%v", atomic.LoadInt32(&hits), h.sleeps)
 	}
 }
 
@@ -201,8 +201,8 @@ func TestRemainingZero403UsesResetFromNow(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
-	if hits != 2 || len(h.sleeps) != 1 || h.sleeps[0] != 31*time.Second {
-		t.Fatalf("hits=%d sleeps=%v", hits, h.sleeps)
+	if atomic.LoadInt32(&hits) != 2 || len(h.sleeps) != 1 || h.sleeps[0] != 31*time.Second {
+		t.Fatalf("hits=%d sleeps=%v", atomic.LoadInt32(&hits), h.sleeps)
 	}
 }
 
@@ -279,8 +279,8 @@ func TestExhaustedReturnsLastResponseIntact(t *testing.T) {
 	}
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != 503 || string(b) != "body" || hits != 3 {
-		t.Fatalf("status=%d body=%q hits=%d", resp.StatusCode, b, hits)
+	if resp.StatusCode != 503 || string(b) != "body" || atomic.LoadInt32(&hits) != 3 {
+		t.Fatalf("status=%d body=%q hits=%d", resp.StatusCode, b, atomic.LoadInt32(&hits))
 	}
 }
 
@@ -303,8 +303,8 @@ func TestTransportErrorRetriedThenReturned(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if hits != 3 || len(h.sleeps) != 2 {
-		t.Fatalf("hits=%d sleeps=%v", hits, h.sleeps)
+	if atomic.LoadInt32(&hits) != 3 || len(h.sleeps) != 2 {
+		t.Fatalf("hits=%d sleeps=%v", atomic.LoadInt32(&hits), h.sleeps)
 	}
 }
 
@@ -314,8 +314,8 @@ func TestTransportErrorNotRetriedForPOST(t *testing.T) {
 	defer srv.Close()
 	h := newHarness()
 	h.tr.Base = &http.Transport{DisableKeepAlives: true}
-	if _, err := h.do(t, "POST", srv.URL, nil); err == nil || hits != 1 {
-		t.Fatalf("err=%v hits=%d", err, hits)
+	if _, err := h.do(t, "POST", srv.URL, nil); err == nil || atomic.LoadInt32(&hits) != 1 {
+		t.Fatalf("err=%v hits=%d", err, atomic.LoadInt32(&hits))
 	}
 }
 
@@ -348,8 +348,8 @@ func TestRateLimitErrorBeyondMaxWait(t *testing.T) {
 	if strings.Contains(rl.URL, "SECRET") || strings.Contains(rl.URL, "?") {
 		t.Fatalf("URL=%q", rl.URL)
 	}
-	if hits != 1 || len(h.sleeps) != 0 {
-		t.Fatalf("hits=%d sleeps=%v", hits, h.sleeps)
+	if atomic.LoadInt32(&hits) != 1 || len(h.sleeps) != 0 {
+		t.Fatalf("hits=%d sleeps=%v", atomic.LoadInt32(&hits), h.sleeps)
 	}
 }
 
@@ -377,8 +377,8 @@ func TestNegativeMaxRetriesSingleAttempt(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
-	if hits != 1 || resp.StatusCode != 503 {
-		t.Fatalf("hits=%d", hits)
+	if atomic.LoadInt32(&hits) != 1 || resp.StatusCode != 503 {
+		t.Fatalf("hits=%d", atomic.LoadInt32(&hits))
 	}
 }
 
@@ -392,8 +392,8 @@ func TestDefaultMaxRetriesIsFour(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
-	if hits != 5 {
-		t.Fatalf("hits=%d", hits)
+	if atomic.LoadInt32(&hits) != 5 {
+		t.Fatalf("hits=%d", atomic.LoadInt32(&hits))
 	}
 }
 
@@ -411,8 +411,8 @@ func TestBodyWithoutGetBodyNotRetried(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
-	if hits != 1 {
-		t.Fatalf("hits=%d", hits)
+	if atomic.LoadInt32(&hits) != 1 {
+		t.Fatalf("hits=%d", atomic.LoadInt32(&hits))
 	}
 }
 
@@ -459,8 +459,8 @@ func TestContextCancelDuringWait(t *testing.T) {
 	if resp != nil {
 		resp.Body.Close()
 	}
-	if !errors.Is(err, context.Canceled) || hits != 1 {
-		t.Fatalf("err=%v hits=%d", err, hits)
+	if !errors.Is(err, context.Canceled) || atomic.LoadInt32(&hits) != 1 {
+		t.Fatalf("err=%v hits=%d", err, atomic.LoadInt32(&hits))
 	}
 }
 
