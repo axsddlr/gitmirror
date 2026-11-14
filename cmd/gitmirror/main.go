@@ -2,18 +2,24 @@
 package main
 
 import (
-	"fmt"
+	"context"
 	"os"
+	"os/signal"
+	"syscall"
 )
 
-// version is set at build time with -ldflags "-X main.version=...".
-var version = "dev"
-
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "version" {
-		fmt.Println(version)
-		return
-	}
-	fmt.Fprintln(os.Stderr, "gitmirror: commands are not implemented yet")
-	os.Exit(2)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	go func() {
+		// The first signal cancels ctx (the engine aborts remaining pairs);
+		// a second one exits immediately.
+		<-ctx.Done()
+		again := make(chan os.Signal, 1)
+		signal.Notify(again, os.Interrupt, syscall.SIGTERM)
+		<-again
+		os.Exit(130)
+	}()
+	code := run(ctx, os.Args[1:], os.Stdout, os.Stderr, os.LookupEnv)
+	stop()
+	os.Exit(code)
 }

@@ -25,6 +25,7 @@ Branch: `build/foundations` (local only, nothing pushed).
 - `${VAR}` inside YAML flow maps must be quoted; README examples must show `token: "${GITHUB_TOKEN}"`.
 - gitx in-process lock map is never pruned (one entry per pair; fine at expected scale).
 - Audit trail: `Store.DeletePair` erases the run that recorded a destination deletion. Keep a durable record (retire the pair instead of deleting it, or a separate audit table).
+- **Do in M7:** `app.Build` calls `AbandonRunning`, so a cron `sync` started while `serve` is mid-sync would mark the server's live runs aborted. Take an exclusive lock on `<state_dir>` in Build (second process exits with a clear "another gitmirror is using this state dir" error); `plan` must not call AbandonRunning.
 - After the deletion grace, archive-fallback outcomes for unowned or already-gone destinations still record a run every reconcile cycle.
 
 ## Local notes
