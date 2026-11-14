@@ -495,6 +495,41 @@ func (s *Store) DeleteReleaseMapping(ctx context.Context, k PairKey, srcID int64
 	return err
 }
 
+// AssetMap returns, for a pair, the destination asset id to source asset id
+// mapping: which source release asset each destination asset was copied
+// from (never nil).
+func (s *Store) AssetMap(ctx context.Context, k PairKey) (map[int64]int64, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT dst_id, src_id FROM asset_map WHERE pair_key = ?`, k.String())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	m := map[int64]int64{}
+	for rows.Next() {
+		var d, src int64
+		if err := rows.Scan(&d, &src); err != nil {
+			return nil, err
+		}
+		m[d] = src
+	}
+	return m, rows.Err()
+}
+
+// SetAssetMapping upserts the source asset id a destination asset was
+// copied from.
+func (s *Store) SetAssetMapping(ctx context.Context, k PairKey, dstAssetID, srcAssetID int64) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO asset_map(pair_key, dst_id, src_id) VALUES (?, ?, ?)
+		ON CONFLICT(pair_key, dst_id) DO UPDATE SET src_id = excluded.src_id`, k.String(), dstAssetID, srcAssetID)
+	return err
+}
+
+// DeleteAssetMapping removes the mapping for a destination asset id. No
+// error if there is none.
+func (s *Store) DeleteAssetMapping(ctx context.Context, k PairKey, dstAssetID int64) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM asset_map WHERE pair_key = ? AND dst_id = ?`, k.String(), dstAssetID)
+	return err
+}
+
 // MarkMissing records that the pair's source was reported as not found and
 // returns when that was first recorded. It is idempotent: repeat calls keep
 // the original first-seen time (the store clock at the first call) until
@@ -538,7 +573,7 @@ func (s *Store) MissingSince(ctx context.Context, k PairKey) (time.Time, bool, e
 }
 
 // DeletePair forgets a pair entirely in one transaction: its pair row, run
-// history, release id mappings and missing record. Destination ownership is
+// history, release and asset id mappings and missing record. Destination ownership is
 // not touched (see ReleaseOwnership). No error if the pair is unknown.
 func (s *Store) DeletePair(ctx context.Context, k PairKey) error {
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -550,6 +585,7 @@ func (s *Store) DeletePair(ctx context.Context, k PairKey) error {
 	for _, q := range []string{
 		`DELETE FROM runs WHERE pair_key = ?`,
 		`DELETE FROM release_map WHERE pair_key = ?`,
+		`DELETE FROM asset_map WHERE pair_key = ?`,
 		`DELETE FROM missing WHERE pair_key = ?`,
 		`DELETE FROM pairs WHERE key = ?`,
 	} {

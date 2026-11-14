@@ -359,6 +359,38 @@ func TestReleaseMap(t *testing.T) {
 	}
 }
 
+func TestAssetMap(t *testing.T) {
+	s := openTemp(t)
+	k := key("a")
+	m, err := s.AssetMap(ctx, k)
+	if err != nil || len(m) != 0 || m == nil {
+		t.Fatalf("%v %v", m, err)
+	}
+	// dst asset id -> src asset id
+	for _, kv := range [][3]any{{k, int64(10), int64(1)}, {k, int64(20), int64(2)}, {k, int64(10), int64(3)}, {key("b"), int64(10), int64(99)}} {
+		if err := s.SetAssetMapping(ctx, kv[0].(PairKey), kv[1].(int64), kv[2].(int64)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m, _ = s.AssetMap(ctx, k)
+	if !reflect.DeepEqual(m, map[int64]int64{10: 3, 20: 2}) {
+		t.Fatalf("%v", m)
+	}
+	if err := s.DeleteAssetMapping(ctx, k, 10); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteAssetMapping(ctx, k, 12345); err != nil {
+		t.Fatalf("deleting an absent mapping: %v", err)
+	}
+	m, _ = s.AssetMap(ctx, k)
+	if !reflect.DeepEqual(m, map[int64]int64{20: 2}) {
+		t.Fatalf("%v", m)
+	}
+	if mb, _ := s.AssetMap(ctx, key("b")); mb[10] != 99 {
+		t.Fatal("other pair affected")
+	}
+}
+
 func TestFixedClockExact(t *testing.T) {
 	s := openTemp(t)
 	want := time.Date(2030, 5, 6, 7, 8, 9, 987654321, time.FixedZone("x", 3600))

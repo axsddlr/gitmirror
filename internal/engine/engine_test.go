@@ -431,34 +431,22 @@ func TestWikiMirrored(t *testing.T) {
 	s := h.addSource(forge.Repo{Name: "proj"})
 	s.commit("a.txt")
 	s.push("main")
-	if err := h.src.InitWiki("alice", "proj"); err != nil {
-		t.Fatal(err)
-	}
-	wikiBare := bareDir(h.srcBase, "alice", "proj", true)
-	wwork := filepath.Join(t.TempDir(), "wiki")
-	h.tgit(filepath.Dir(wwork), "init", "-q", "-b", "master", wwork)
-	if err := os.WriteFile(filepath.Join(wwork, "Home.md"), []byte("# Home\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	h.tgit(wwork, "add", "Home.md")
-	h.tgit(wwork, "commit", "-q", "-m", "home")
-	h.tgit(wwork, "push", "-q", fileURL(wikiBare), "master")
+	wikiBare := h.seedWiki(t)
 	p := h.pair(s, settings())
 
-	// The destination wiki does not exist yet: failed with a hint, run partial.
+	// The destination wiki does not exist yet: the engine initialises it
+	// (forge.WikiInitializer) before the push, so the first run is ok.
 	r := h.sync(p, Options{})
-	wantStatus(t, r, state.RunPartial)
-	if d := wantStep(t, r, "wiki", state.StepFailed); !strings.Contains(d.Detail, "create") {
-		t.Fatalf("wiki detail = %q, want a hint to create a page first", d.Detail)
-	}
-
-	if err := h.dst.InitWiki("mirrors", "proj"); err != nil {
-		t.Fatal(err)
-	}
-	r = h.sync(p, Options{})
 	wantStatus(t, r, state.RunOK)
 	wantStep(t, r, "wiki", state.StepOK)
+	if countCall(h.dst.Calls(), "EnsureWiki") != 1 {
+		t.Fatalf("EnsureWiki calls = %v", h.dst.Calls())
+	}
 	equalRefs(t, "wiki refs", h.refs(bareDir(h.dstBase, "mirrors", "proj", true)), h.refs(wikiBare))
+
+	r = h.sync(p, Options{})
+	wantStatus(t, r, state.RunOK)
+	wantStep(t, r, "wiki", state.StepUnchanged)
 }
 
 func TestEmptySourceWikiSkipped(t *testing.T) {

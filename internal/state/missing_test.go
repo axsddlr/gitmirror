@@ -64,6 +64,15 @@ func schemaVersion(t *testing.T, s *Store) int {
 	return v
 }
 
+func latestVersion(t *testing.T) int {
+	t.Helper()
+	ms, err := loadMigrations()
+	if err != nil || len(ms) == 0 {
+		t.Fatalf("loadMigrations: %v (%d)", err, len(ms))
+	}
+	return ms[len(ms)-1].version
+}
+
 func TestMigrationFromV1(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "v1.db")
 	// Build a database exactly as a v1 binary would have left it.
@@ -92,14 +101,21 @@ func TestMigrationFromV1(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open v1 db: %v", err)
 	}
-	if v := schemaVersion(t, s); v != 2 {
-		t.Fatalf("schema version after upgrade = %d, want 2", v)
+	latest := latestVersion(t)
+	if latest < 3 {
+		t.Fatalf("latest migration = %d, want >= 3 (asset map)", latest)
+	}
+	if v := schemaVersion(t, s); v != latest {
+		t.Fatalf("schema version after upgrade = %d, want %d", v, latest)
 	}
 	if ps, _ := s.Pairs(ctx); len(ps) != 1 {
 		t.Fatalf("pairs lost in migration: %+v", ps)
 	}
 	if _, err := s.MarkMissing(ctx, key("a")); err != nil {
 		t.Fatalf("MarkMissing on upgraded db: %v", err)
+	}
+	if err := s.SetAssetMapping(ctx, key("a"), 5, 6); err != nil {
+		t.Fatalf("SetAssetMapping on upgraded db: %v", err)
 	}
 	var n1 int
 	s.db.QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&n1)
@@ -113,7 +129,7 @@ func TestMigrationFromV1(t *testing.T) {
 	defer s.Close()
 	var n2 int
 	s.db.QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&n2)
-	if n1 != 2 || n2 != 2 || schemaVersion(t, s) != 2 {
+	if n1 != latest || n2 != latest || schemaVersion(t, s) != latest {
 		t.Fatalf("migrations rows %d -> %d, version %d", n1, n2, schemaVersion(t, s))
 	}
 	if _, ok, _ := s.MissingSince(ctx, key("a")); !ok {
@@ -134,6 +150,9 @@ func TestDeletePairCascade(t *testing.T) {
 			t.Fatal(err)
 		}
 		if err := s.SetReleaseMapping(ctx, pk, 1, 10); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.SetAssetMapping(ctx, pk, 100, 7); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := s.MarkMissing(ctx, pk); err != nil {
@@ -161,6 +180,9 @@ func TestDeletePairCascade(t *testing.T) {
 	if m, _ := s.ReleaseMap(ctx, k); len(m) != 0 {
 		t.Fatalf("release map survived DeletePair: %v", m)
 	}
+	if m, _ := s.AssetMap(ctx, k); len(m) != 0 {
+		t.Fatalf("asset map survived DeletePair: %v", m)
+	}
 	if _, ok, _ := s.MissingSince(ctx, k); ok {
 		t.Fatal("missing record survived DeletePair")
 	}
@@ -177,6 +199,9 @@ func TestDeletePairCascade(t *testing.T) {
 	}
 	if m, _ := s.ReleaseMap(ctx, other); m[1] != 10 {
 		t.Fatal("other release map affected")
+	}
+	if m, _ := s.AssetMap(ctx, other); m[100] != 7 {
+		t.Fatal("other asset map affected")
 	}
 	if _, ok, _ := s.MissingSince(ctx, other); !ok {
 		t.Fatal("other missing record affected")

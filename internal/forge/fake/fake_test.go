@@ -249,6 +249,156 @@ func TestWikiInit(t *testing.T) {
 	}
 }
 
+var _ forge.WikiInitializer = (*Provider)(nil)
+
+func TestEnsureWiki(t *testing.T) {
+	requireGit(t)
+	dir := t.TempDir()
+	p := New(Options{GitBaseDir: dir})
+	p.AddRepo(forge.Repo{Owner: "o", Name: "n"})
+	u := p.WikiGitURL("o", "n")
+	if out, err := exec.Command("git", "ls-remote", u).CombinedOutput(); err == nil {
+		t.Fatalf("wiki readable before EnsureWiki: %s", out)
+	}
+	before := len(p.Calls())
+	for range 2 { // idempotent
+		if err := p.EnsureWiki(ctx, "O", "N"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := p.Calls()[before:]; !reflect.DeepEqual(got, []string{"EnsureWiki", "EnsureWiki"}) {
+		t.Fatalf("calls = %v", got)
+	}
+	lsRemote(t, u)
+	if err := p.EnsureWiki(ctx, "o", "missing"); !errors.Is(err, forge.ErrNotFound) {
+		t.Fatalf("want ErrNotFound, got %v", err)
+	}
+	boom := errors.New("boom")
+	p.FailNext("EnsureWiki", boom)
+	if err := p.EnsureWiki(ctx, "o", "n"); !errors.Is(err, boom) {
+		t.Fatalf("FailNext not honoured: %v", err)
+	}
+	// Without GitBaseDir it only validates the repo.
+	q := New(Options{})
+	q.AddRepo(forge.Repo{Owner: "o", Name: "n"})
+	if err := q.EnsureWiki(ctx, "o", "n"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// pushTo pushes refspecs from a fresh work repo with branches main and
+// feature (same commit) to url. Dates are fixed so every call creates the
+// same commit and repeated pushes are fast-forwards (no-ops).
+func pushTo(t *testing.T, url string, refspecs ...string) error {
+	t.Helper()
+	w := t.TempDir()
+	for _, args := range [][]string{
+		{"init", "-q", "-b", "main", w},
+		{"-C", w, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "x"},
+		{"-C", w, "branch", "feature"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_DATE=2020-01-01T00:00:00Z", "GIT_COMMITTER_DATE=2020-01-01T00:00:00Z")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	out, err := exec.Command("git", append([]string{"-C", w, "push", "--atomic", url}, refspecs...)...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%v: %s", err, out)
+	}
+	return nil
+}
+
+func TestDefaultFromFirstPush(t *testing.T) {
+	requireGit(t)
+	newRepo := func(t *testing.T) *Provider {
+		p := New(Options{GitBaseDir: t.TempDir(), Username: "me", DefaultFromFirstPush: true})
+		if _, err := p.CreateRepo(ctx, forge.CreateOptions{Owner: "me", Name: "r"}); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	t.Run("AllAtOnce", func(t *testing.T) {
+		p := newRepo(t)
+		if r, _ := p.GetRepo(ctx, "me", "r"); r.DefaultBranch != "main" || !r.Empty {
+			t.Fatalf("before push: %+v", r)
+		}
+		// git sends refs sorted: feature is the first pushed branch.
+		if err := pushTo(t, p.GitURL("me", "r"), "refs/heads/*:refs/heads/*"); err != nil {
+			t.Fatal(err)
+		}
+		if r, _ := p.GetRepo(ctx, "me", "r"); r.DefaultBranch != "feature" || r.Empty {
+			t.Fatalf("after push: %+v, want default feature", r)
+		}
+	})
+	t.Run("MainFirst", func(t *testing.T) {
+		p := newRepo(t)
+		u := p.GitURL("me", "r")
+		if err := pushTo(t, u, "refs/heads/main:refs/heads/main"); err != nil {
+			t.Fatal(err)
+		}
+		if err := pushTo(t, u, "refs/heads/*:refs/heads/*"); err != nil {
+			t.Fatal(err)
+		}
+		if r, _ := p.GetRepo(ctx, "me", "r"); r.DefaultBranch != "main" {
+			t.Fatalf("after push: %+v, want default main", r)
+		}
+	})
+	t.Run("SettingsWinAfterFirstPush", func(t *testing.T) {
+		p := newRepo(t)
+		if err := pushTo(t, p.GitURL("me", "r"), "refs/heads/*:refs/heads/*"); err != nil {
+			t.Fatal(err)
+		}
+		br := "main"
+		if err := p.UpdateRepoSettings(ctx, "me", "r", forge.Settings{DefaultBranch: &br}); err != nil {
+			t.Fatal(err)
+		}
+		if r, _ := p.GetRepo(ctx, "me", "r"); r.DefaultBranch != "main" {
+			t.Fatalf("explicit default overridden: %+v", r)
+		}
+	})
+}
+
+func TestProtectDefaultBranch(t *testing.T) {
+	requireGit(t)
+	p := New(Options{GitBaseDir: t.TempDir(), Username: "me", ProtectDefaultBranch: true})
+	if _, err := p.CreateRepo(ctx, forge.CreateOptions{Owner: "me", Name: "r"}); err != nil {
+		t.Fatal(err)
+	}
+	u := p.GitURL("me", "r")
+	if err := pushTo(t, u, "refs/heads/*:refs/heads/*"); err != nil {
+		t.Fatal(err)
+	}
+	br := "feature"
+	if err := p.UpdateRepoSettings(ctx, "me", "r", forge.Settings{DefaultBranch: &br}); err != nil {
+		t.Fatal(err)
+	}
+	err := pushTo(t, u, ":refs/heads/feature")
+	if err == nil || !strings.Contains(err.Error(), "default branch") {
+		t.Fatalf("deleting the default branch: err = %v, want a refusal naming the default branch", err)
+	}
+	// Other branches can be deleted; after a default change, so can feature.
+	br = "main"
+	if err := p.UpdateRepoSettings(ctx, "me", "r", forge.Settings{DefaultBranch: &br}); err != nil {
+		t.Fatal(err)
+	}
+	if err := pushTo(t, u, ":refs/heads/feature"); err != nil {
+		t.Fatalf("deleting a non-default branch: %v", err)
+	}
+	// Seeded repos are protected too.
+	if err := p.AddRepo(forge.Repo{Owner: "me", Name: "s", DefaultBranch: "main"}); err != nil {
+		t.Fatal(err)
+	}
+	us := p.GitURL("me", "s")
+	if err := pushTo(t, us, "refs/heads/*:refs/heads/*"); err != nil {
+		t.Fatal(err)
+	}
+	if err := pushTo(t, us, ":refs/heads/main"); err == nil {
+		t.Fatal("deleting the default branch of a seeded repo succeeded")
+	}
+}
+
 func TestAuthAndRate(t *testing.T) {
 	p := New(Options{Username: "u", Token: "tok"})
 	if a := p.GitAuth(); a.Username != "u" || a.Token != "tok" {

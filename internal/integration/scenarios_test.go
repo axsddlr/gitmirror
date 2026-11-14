@@ -419,20 +419,16 @@ func (s *suite) testIncremental(t *testing.T) {
 	}
 }
 
-// testDefaultBranchAfterFirstPush reproduces an engine bug: Gitea makes the
+// testDefaultBranchAfterFirstPush is a regression test: Gitea makes the
 // first branch of the first push into an empty repository its default
-// branch, asynchronously, after receive-pack has returned. gitx pushes
-// refs/heads/* in sorted order, so a source with branch "feature" and
-// default "main" yields a destination whose default branch is "feature";
-// the settings step ran before Gitea's update and saw "main", so it does
-// not correct it. Deleting "feature" at the source then makes every later
-// push fail (Gitea refuses to delete the default branch, and the push is
-// atomic), and because settings are skipped after a failed git step the
-// pair never recovers.
+// branch, asynchronously, after receive-pack has returned. Pushing
+// refs/heads/* in sorted order made a source with branch "feature" and
+// default "main" yield a destination whose default branch was "feature";
+// deleting "feature" at the source then made every later push fail (Gitea
+// refuses to delete the default branch, and the push is atomic). gitx now
+// pushes the source's default branch first into an empty destination, and
+// the settings step corrects the default branch even after a rejected push.
 func (s *suite) testDefaultBranchAfterFirstPush(t *testing.T) {
-	if os.Getenv("GITMIRROR_RUN_KNOWN_BUGS") != "1" {
-		t.Skip("known bug (internal/gitx/cache.go push order + internal/engine/sync.go settings/git ordering); set GITMIRROR_RUN_KNOWN_BUGS=1 to run")
-	}
 	a, b := s.a, s.b
 	w := s.seed(t, a, "alice", "kb-default", "", "feature")
 	m := s.newMirror(t, `
@@ -541,12 +537,9 @@ func (s *suite) testReleases(t *testing.T) {
 	}
 	check("edited body", files)
 
-	// Known engine limitation: an asset replaced by one of the same size is
-	// not detected (engine compares names and sizes only).
+	// An asset replaced by one of the same size is re-copied: the engine
+	// tracks which source asset each destination asset was copied from.
 	t.Run("SameSizeReplacement", func(t *testing.T) {
-		if os.Getenv("GITMIRROR_RUN_KNOWN_BUGS") != "1" {
-			t.Skip("known bug (internal/engine/releases.go syncAssets compares sizes only); set GITMIRROR_RUN_KNOWN_BUGS=1 to run")
-		}
 		cur, err := arp.ListReleases(ctxb(), "alice", "s3")
 		if err != nil {
 			t.Fatal(err)
@@ -601,29 +594,10 @@ func (s *suite) testWiki(t *testing.T) {
   from: {forge: a, repo: alice/s4}
   to: {forge: b, repo: mirrors/s4}
 `)
+	// Gitea refuses every git operation on a wiki that has no page yet; the
+	// engine initialises the destination wiki (forge.WikiInitializer) before
+	// the first push, so the very first run is ok.
 	r := m.one("b:mirrors/s4")
-	ws := step(r, "wiki")
-	t.Logf("first run into an uninitialised destination wiki: status %s, wiki step %s: %s", r.Status, ws.Status, ws.Detail)
-
-	if ws.Status != state.StepOK {
-		// Gitea refuses every git operation on a wiki that has no page yet
-		// ("wiki doesn't exist, please initialize the wiki by creating a new
-		// page first"). The gitea provider can initialise it via the API.
-		if !strings.Contains(ws.Detail, "wiki doesn't exist") {
-			t.Fatalf("unexpected wiki failure: %s", ws.Detail)
-		}
-		wantStatus(t, r, state.RunPartial)
-		wi, ok := b.prov.(interface {
-			EnsureWiki(ctx context.Context, owner, name string) error
-		})
-		if !ok {
-			t.Fatal("gitea provider has no EnsureWiki")
-		}
-		if err := wi.EnsureWiki(ctxb(), "mirrors", "s4"); err != nil {
-			t.Fatalf("EnsureWiki: %v", err)
-		}
-		r = m.one("b:mirrors/s4")
-	}
 	wantStatus(t, r, state.RunOK)
 	wantStep(t, r, "wiki", state.StepOK)
 	equalRefs(t, "wiki", s.git.lsRemote(t, b.wikiURL("mirrors", "s4")), s.git.lsRemote(t, a.wikiURL("alice", "s4")))

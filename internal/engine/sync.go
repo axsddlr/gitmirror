@@ -52,6 +52,7 @@ type pairRun struct {
 	srcRefs      []gitx.Ref
 	srcRefsKnown bool
 	gitDone      bool // git step succeeded in a real run
+	pushRejected bool // git step failed because the destination rejected refs
 	digest       string
 	refCount     int
 
@@ -148,6 +149,8 @@ func (r *pairRun) run(ctx context.Context) {
 		switch {
 		case !r.includes(s.name):
 			r.skip(s.name, "not included")
+		case !ok && s.name == StepSettings && r.pushRejected:
+			r.healDefaultBranch(ctx)
 		case !ok:
 			r.skip(s.name, "git step did not complete")
 		default:
@@ -306,6 +309,7 @@ func (r *pairRun) syncGit(ctx context.Context) bool {
 		recordLFS(state.StepSkipped, "git-lfs not installed")
 	}
 	gitFail := func(err error) bool {
+		r.pushRejected = errors.Is(err, gitx.ErrPushRejected)
 		r.fatal(fmt.Errorf("git: %w", err))
 		r.record(StepGit, start, state.StepFailed, err.Error())
 		recordLFS(state.StepSkipped, "git step did not complete")
@@ -344,6 +348,9 @@ func (r *pairRun) syncGit(ctx context.Context) bool {
 		LFS:              lfsOK,
 		DryRun:           r.dry(),
 		AllowEmptySource: prev.LastRefCount == 0,
+		// Forges like Gitea make the first pushed branch the default of an
+		// empty repository: push the source's default first.
+		FirstBranch: r.src.DefaultBranch,
 	})
 	if errors.Is(err, gitx.ErrEmptySource) {
 		r.aborted = true
@@ -418,6 +425,55 @@ func (r *pairRun) sourceHasBranch(ctx context.Context, b string) (bool, error) {
 	return false, nil
 }
 
+// defaultBranchChange returns the default branch to set on the destination
+// cur (nil when it already matches or cannot be applied) and, when the
+// source's default cannot be applied, a note saying why.
+func (r *pairRun) defaultBranchChange(ctx context.Context, cur *forge.Repo) (*string, string) {
+	b := r.src.DefaultBranch
+	if b == "" || b == cur.DefaultBranch {
+		return nil, ""
+	}
+	has, err := r.sourceHasBranch(ctx, b)
+	switch {
+	case err != nil:
+		return nil, fmt.Sprintf("default branch %q left unchanged: %v", b, err)
+	case !has:
+		return nil, fmt.Sprintf("default branch %q does not exist in the source refs; left unchanged", b)
+	}
+	return &b, ""
+}
+
+// healDefaultBranch runs in place of the settings step when the destination
+// rejected the git push. A wrong destination default branch can itself be
+// the cause: Gitea makes the first pushed branch the default of an empty
+// repository and refuses to delete the default branch, so once that branch
+// is deleted at the source every (atomic) push is rejected. Only the default
+// branch is corrected, against fresh destination metadata; the other
+// settings wait for a successful git step.
+func (r *pairRun) healDefaultBranch(ctx context.Context) {
+	start := time.Now()
+	cur, err := r.dstP.GetRepo(ctx, r.p.DstOwner, r.p.DstName)
+	if err != nil {
+		r.stepFailed(StepSettings, start, fmt.Errorf("get destination: %w", err))
+		return
+	}
+	v, note := r.defaultBranchChange(ctx, cur)
+	if v == nil {
+		detail := "git step did not complete"
+		if note != "" {
+			detail += "; " + note
+		}
+		r.record(StepSettings, start, state.StepSkipped, detail)
+		return
+	}
+	r.action("update settings of %s: default branch", r.dstName())
+	if err := r.dstP.UpdateRepoSettings(ctx, r.p.DstOwner, r.p.DstName, forge.Settings{DefaultBranch: v}); err != nil {
+		r.stepFailed(StepSettings, start, err)
+		return
+	}
+	r.record(StepSettings, start, state.StepOK, fmt.Sprintf("updated default branch to %q only (git step failed; other settings skipped)", *v))
+}
+
 func (r *pairRun) syncSettings(ctx context.Context) {
 	start := time.Now()
 	cur := r.dst
@@ -446,18 +502,11 @@ func (r *pairRun) syncSettings(ctx context.Context) {
 		s.Topics = &want
 		changed = append(changed, "topics")
 	}
-	if b := src.DefaultBranch; b != "" && b != cur.DefaultBranch {
-		has, err := r.sourceHasBranch(ctx, b)
-		switch {
-		case err != nil:
-			notes = append(notes, fmt.Sprintf("default branch %q left unchanged: %v", b, err))
-		case !has:
-			notes = append(notes, fmt.Sprintf("default branch %q does not exist in the source refs; left unchanged", b))
-		default:
-			v := b
-			s.DefaultBranch = &v
-			changed = append(changed, "default branch")
-		}
+	if v, note := r.defaultBranchChange(ctx, cur); v != nil {
+		s.DefaultBranch = v
+		changed = append(changed, "default branch")
+	} else if note != "" {
+		notes = append(notes, note)
 	}
 	if r.wantPriv != cur.Private {
 		v := r.wantPriv
@@ -503,10 +552,22 @@ func (r *pairRun) syncWiki(ctx context.Context) {
 		r.skip(StepWiki, "unsupported by "+r.dstP.Type())
 		return
 	}
+	// Some forges (Gitea) refuse git access to a wiki that was never
+	// created; initialise it first (never in a dry run).
+	wi, canInit := r.dstP.(forge.WikiInitializer)
 	if r.dry() && !r.dstExists {
+		if canInit {
+			r.action("initialise destination wiki")
+		}
 		r.action("mirror wiki")
 		r.skip(StepWiki, "destination does not exist yet (dry-run)")
 		return
+	}
+	if canInit && !r.dry() {
+		if err := wi.EnsureWiki(ctx, r.p.DstOwner, r.p.DstName); err != nil {
+			r.stepFailed(StepWiki, start, fmt.Errorf("initialise destination wiki: %w", err))
+			return
+		}
 	}
 	src := remote(sw.WikiGitURL(r.src.Owner, r.src.Name), r.srcP.GitAuth())
 	dst := remote(dw.WikiGitURL(r.p.DstOwner, r.p.DstName), r.dstP.GitAuth())
@@ -517,7 +578,19 @@ func (r *pairRun) syncWiki(ctx context.Context) {
 		return
 	}
 	if err != nil {
-		r.stepFailed(StepWiki, start, fmt.Errorf("%w (the destination wiki may not exist yet: create one page in the destination's web UI, then retry)", err))
+		if errors.Is(err, gitx.ErrDestination) {
+			if r.dry() && canInit {
+				// Probably not initialised yet; a real run would do that first.
+				r.action("initialise destination wiki")
+				r.action("mirror wiki")
+				r.record(StepWiki, start, state.StepSkipped, fmt.Sprintf("destination wiki not readable; a real run initialises it first (dry-run): %v", err))
+				return
+			}
+			if !canInit {
+				err = fmt.Errorf("%w (the destination wiki may not exist yet: create one page in the destination's web UI, then retry)", err)
+			}
+		}
+		r.stepFailed(StepWiki, start, err)
 		return
 	}
 	if !res.Changed {

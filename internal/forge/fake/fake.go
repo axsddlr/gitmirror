@@ -32,6 +32,7 @@ var (
 	_ forge.OrgProvider     = (*Provider)(nil)
 	_ forge.WebhookProvider = (*Provider)(nil)
 	_ forge.RepoDeleter     = (*Provider)(nil)
+	_ forge.WikiInitializer = (*Provider)(nil)
 )
 
 // SignatureHeader carries the webhook signature.
@@ -47,7 +48,50 @@ type Options struct {
 	// user namespace that always exists.
 	Username string
 	Token    string
+	// DefaultFromFirstPush simulates Gitea/Forgejo: the first branch of the
+	// first git push into a repository made by CreateRepo becomes its default
+	// branch (visible from the next GetRepo), whatever default it was
+	// created with. Requires GitBaseDir.
+	DefaultFromFirstPush bool
+	// ProtectDefaultBranch makes the git repositories of CreateRepo and
+	// AddRepo refuse pushes that delete the repository's current default
+	// branch, as Gitea does; with an atomic push every ref is then rejected.
+	// Requires GitBaseDir.
+	ProtectDefaultBranch bool
 }
+
+// firstPushFile, inside a bare repository, holds the first branch of the
+// first push (written by the DefaultFromFirstPush post-receive hook).
+const firstPushFile = "fake-first-push"
+
+const firstPushHook = `#!/bin/sh
+first=
+while read old new ref; do
+	case "$ref" in
+	refs/heads/*) [ -z "$first" ] && first="${ref#refs/heads/}" ;;
+	esac
+done
+if [ -n "$first" ] && [ ! -f ` + firstPushFile + ` ]; then
+	echo "$first" > ` + firstPushFile + `
+fi
+`
+
+const protectDefaultHook = `#!/bin/sh
+def=$(git symbolic-ref -q HEAD)
+status=0
+while read old new ref; do
+	case "$new" in
+	*[!0]*) ;;
+	*)
+		if [ "$ref" = "$def" ]; then
+			echo "fake: refusing to delete the default branch ${ref#refs/heads/}"
+			status=1
+		fi
+		;;
+	esac
+done
+exit $status
+`
 
 type repoEntry struct {
 	repo     forge.Repo
@@ -209,6 +253,42 @@ func initBare(dir, branch string) error {
 	return nil
 }
 
+func writeHook(dir, name, body string) error {
+	hooks := filepath.Join(dir, "hooks")
+	if err := os.MkdirAll(hooks, 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(hooks, name), []byte(body), 0o755)
+}
+
+// setupGitRepo installs the hooks the options ask for into the bare
+// repository of owner/name and points its HEAD at branch. The caller must
+// hold p.mu.
+func (p *Provider) setupGitRepo(owner, name, branch string, created bool) error {
+	dir := p.bareDir(owner, name, false)
+	if p.opts.DefaultFromFirstPush && created {
+		if err := writeHook(dir, "post-receive", firstPushHook); err != nil {
+			return err
+		}
+	}
+	if p.opts.ProtectDefaultBranch {
+		if err := writeHook(dir, "pre-receive", protectDefaultHook); err != nil {
+			return err
+		}
+		return p.setHEAD(owner, name, branch)
+	}
+	return nil
+}
+
+// setHEAD records branch as the default of the bare repository (its HEAD),
+// which the ProtectDefaultBranch hook reads. The caller must hold p.mu.
+func (p *Provider) setHEAD(owner, name, branch string) error {
+	if p.opts.GitBaseDir == "" || !p.opts.ProtectDefaultBranch || branch == "" {
+		return nil
+	}
+	return os.WriteFile(filepath.Join(p.bareDir(owner, name, false), "HEAD"), []byte("ref: refs/heads/"+branch+"\n"), 0o644)
+}
+
 // ---- seeding helpers (not recorded in Calls, never fail-injected) ----
 
 // AddOwner registers a user or organisation namespace.
@@ -226,6 +306,9 @@ func (p *Provider) AddRepo(r forge.Repo) error {
 	r = cloneRepo(r)
 	if p.opts.GitBaseDir != "" {
 		if err := initBare(p.bareDir(r.Owner, r.Name, false), r.DefaultBranch); err != nil {
+			return err
+		}
+		if err := p.setupGitRepo(r.Owner, r.Name, r.DefaultBranch, false); err != nil {
 			return err
 		}
 	}
@@ -347,8 +430,27 @@ func (p *Provider) GetRepo(ctx context.Context, owner, name string) (*forge.Repo
 	if !ok {
 		return nil, p.notFound(owner, name)
 	}
+	p.applyFirstPush(e)
 	r := cloneRepo(e.repo)
 	return &r, nil
+}
+
+// applyFirstPush implements Options.DefaultFromFirstPush: once the hook has
+// recorded the first pushed branch of an empty repository, that branch
+// becomes its default. The caller must hold p.mu.
+func (p *Provider) applyFirstPush(e *repoEntry) {
+	if !p.opts.DefaultFromFirstPush || p.opts.GitBaseDir == "" || !e.repo.Empty {
+		return
+	}
+	b, err := os.ReadFile(filepath.Join(p.bareDir(e.repo.Owner, e.repo.Name, false), firstPushFile))
+	if err != nil {
+		return
+	}
+	if br := strings.TrimSpace(string(b)); br != "" {
+		e.repo.DefaultBranch = br
+		e.repo.Empty = false
+		_ = p.setHEAD(e.repo.Owner, e.repo.Name, br)
+	}
 }
 
 // ListRepos implements forge.Provider.
@@ -395,6 +497,9 @@ func (p *Provider) CreateRepo(ctx context.Context, opts forge.CreateOptions) (*f
 		if err := initBare(p.bareDir(opts.Owner, opts.Name, false), "main"); err != nil {
 			return nil, err
 		}
+		if err := p.setupGitRepo(opts.Owner, opts.Name, "main", true); err != nil {
+			return nil, err
+		}
 	}
 	if !known {
 		p.owners[ol] = false
@@ -433,7 +538,11 @@ func (p *Provider) UpdateRepoSettings(ctx context.Context, owner, name string, s
 		e.repo.Topics = append([]string{}, (*s.Topics)...)
 	}
 	if s.DefaultBranch != nil {
+		p.applyFirstPush(e) // an explicit default overrides the first push
 		e.repo.DefaultBranch = *s.DefaultBranch
+		if err := p.setHEAD(owner, name, *s.DefaultBranch); err != nil {
+			return err
+		}
 	}
 	if s.Private != nil {
 		e.repo.Private = *s.Private
@@ -502,6 +611,30 @@ func (p *Provider) WikiGitURL(owner, name string) string {
 	defer p.mu.Unlock()
 	p.calls = append(p.calls, "WikiGitURL")
 	return p.gitURL(owner, name, true)
+}
+
+// ---- forge.WikiInitializer ----
+
+// EnsureWiki implements forge.WikiInitializer: it creates the bare wiki
+// repository (when GitBaseDir is set) and marks the repo as having a wiki.
+// It is idempotent.
+func (p *Provider) EnsureWiki(ctx context.Context, owner, name string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if err := p.begin(ctx, "EnsureWiki"); err != nil {
+		return err
+	}
+	e, ok := p.repos[key(owner, name)]
+	if !ok {
+		return p.notFound(owner, name)
+	}
+	if p.opts.GitBaseDir != "" {
+		if err := initBare(p.bareDir(owner, name, true), "master"); err != nil {
+			return err
+		}
+	}
+	e.repo.HasWiki = true
+	return nil
 }
 
 // ---- forge.OrgProvider ----

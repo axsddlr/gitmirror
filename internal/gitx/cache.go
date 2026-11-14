@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 var (
@@ -25,7 +26,33 @@ var (
 	// ErrPushRejected is returned (wrapped) when the destination rejected one
 	// or more refs (e.g. a protected branch); the message lists them.
 	ErrPushRejected = errors.New("gitx: destination rejected refs")
+
+	// ErrDestination is matched (errors.Is) by Sync errors that came from
+	// talking to the destination remote (listing, LFS push or ref push), as
+	// opposed to the source or the local cache.
+	ErrDestination = errors.New("gitx: destination remote failed")
 )
+
+// Bounds on the remote's own output quoted in an ErrPushRejected error.
+const (
+	maxRemoteLines  = 10
+	maxRemoteReason = 2 << 10
+)
+
+// dstError marks an error as coming from the destination remote without
+// changing its message.
+type dstError struct{ err error }
+
+func (e *dstError) Error() string        { return e.err.Error() }
+func (e *dstError) Unwrap() error        { return e.err }
+func (e *dstError) Is(target error) bool { return target == ErrDestination }
+
+func onDst(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &dstError{err: err}
+}
 
 var mirrorRefspecs = []string{"+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*"}
 
@@ -61,6 +88,12 @@ type SyncOptions struct {
 	// ErrEmptySource. An empty source never deletes destination refs, even
 	// with Prune.
 	AllowEmptySource bool
+	// FirstBranch, when set and the destination has no branches or tags at
+	// all, is pushed on its own (refs/heads/<FirstBranch>) before the full
+	// push. Forges such as Gitea make the first pushed branch the default
+	// branch of an empty repository, so callers pass the source's default
+	// branch. It is ignored when the source has no such branch.
+	FirstBranch string
 }
 
 // SyncResult describes what a Sync found and did.
@@ -173,7 +206,7 @@ func (c *Cache) sync(ctx context.Context, src, dst Remote, opt SyncOptions) (*Sy
 
 	dstRefs, err := r.LsRemote(ctx, dst)
 	if err != nil {
-		return nil, err
+		return nil, onDst(err)
 	}
 	res.DstRefsBefore = dstRefs
 	res.Created, res.Updated, res.Deleted = diffRefs(cacheRefs, dstRefs, opt.Prune)
@@ -187,15 +220,35 @@ func (c *Cache) sync(ctx context.Context, src, dst Remote, opt SyncOptions) (*Sy
 			return nil, fmt.Errorf("gitx: lfs fetch %s: %w", src, err)
 		}
 		if _, err := r.run(ctx, spec{gitDir: dir, auth: []Remote{dst}, args: []string{"lfs", "push", "--all", "--", dst.URL}}); err != nil {
-			return nil, fmt.Errorf("gitx: lfs push %s: %w", dst, err)
+			return nil, onDst(fmt.Errorf("gitx: lfs push %s: %w", dst, err))
 		}
 		res.LFSObjects = countLFSObjects(dir)
 	}
 
-	if err := push(ctx, r, dir, dst, opt.Prune); err != nil {
+	if first := firstBranchRef(opt.FirstBranch, cacheRefs, dstRefs); first != "" {
+		if err := push(ctx, r, dir, dst, false, []string{"+" + first + ":" + first}); err != nil {
+			return nil, err
+		}
+	}
+	if err := push(ctx, r, dir, dst, opt.Prune, mirrorRefspecs); err != nil {
 		return nil, err
 	}
 	return res, nil
+}
+
+// firstBranchRef returns refs/heads/<branch> when it must be pushed on its
+// own first: the destination has no refs and the source has that branch.
+func firstBranchRef(branch string, src, dst []Ref) string {
+	if branch == "" || len(dst) > 0 {
+		return ""
+	}
+	name := "refs/heads/" + branch
+	for _, r := range src {
+		if r.Name == name {
+			return name
+		}
+	}
+	return ""
 }
 
 func (c *Cache) emptySource(ctx context.Context, r *Runner, src, dst Remote, opt SyncOptions, res *SyncResult) (*SyncResult, error) {
@@ -204,7 +257,7 @@ func (c *Cache) emptySource(ctx context.Context, r *Runner, src, dst Remote, opt
 	}
 	dstRefs, err := r.LsRemote(ctx, dst)
 	if err != nil {
-		return nil, err
+		return nil, onDst(err)
 	}
 	res.SrcRefs = nil
 	res.DstRefsBefore = dstRefs
@@ -282,9 +335,11 @@ func diffRefs(src, dst []Ref, prune bool) (created, updated, deleted []string) {
 	return created, updated, deleted
 }
 
-// push pushes cache heads/tags to dst, atomically when the remote supports
-// it, and reports per-ref rejections from --porcelain output.
-func push(ctx context.Context, r *Runner, dir string, dst Remote, prune bool) error {
+// push pushes refspecs from the cache to dst, atomically when the remote
+// supports it, and reports per-ref rejections from --porcelain output
+// together with the remote's own explanation. Errors are marked
+// ErrDestination.
+func push(ctx context.Context, r *Runner, dir string, dst Remote, prune bool, refspecs []string) error {
 	args := func(atomic bool) []string {
 		a := []string{"push", "--porcelain", "--force"}
 		if prune {
@@ -294,7 +349,7 @@ func push(ctx context.Context, r *Runner, dir string, dst Remote, prune bool) er
 			a = append(a, "--atomic")
 		}
 		a = append(a, "--", dst.URL)
-		return append(a, mirrorRefspecs...)
+		return append(a, refspecs...)
 	}
 	out, err := r.run(ctx, spec{gitDir: dir, auth: []Remote{dst}, args: args(true)})
 	rejected, statuses := parsePorcelain(out)
@@ -304,12 +359,49 @@ func push(ctx context.Context, r *Runner, dir string, dst Remote, prune bool) er
 		rejected, _ = parsePorcelain(out)
 	}
 	if len(rejected) > 0 {
-		return scrubErr(fmt.Errorf("gitx: push to %s: %w: %s", dst, ErrPushRejected, strings.Join(rejected, "; ")), dst)
+		msg := strings.Join(rejected, "; ")
+		var ce *cmdError
+		if errors.As(err, &ce) {
+			if why := remoteReason(ce.stderr); why != "" {
+				msg += "; remote: " + why
+			}
+		}
+		return onDst(scrubErr(fmt.Errorf("gitx: push to %s: %w: %s", dst, ErrPushRejected, msg), dst))
 	}
 	if err != nil {
-		return fmt.Errorf("gitx: push to %s: %w", dst, err)
+		return onDst(fmt.Errorf("gitx: push to %s: %w", dst, err))
 	}
 	return nil
+}
+
+// remoteReason extracts what the remote said (its "remote: ..." stderr
+// lines, e.g. a pre-receive hook's message) from already-scrubbed git
+// stderr: the last maxRemoteLines non-empty lines joined with " | ", cut to
+// at most maxRemoteReason bytes (keeping the end).
+func remoteReason(stderr string) string {
+	var lines []string
+	for _, l := range strings.Split(stderr, "\n") {
+		l = strings.TrimSpace(strings.ReplaceAll(l, "\x1b[K", ""))
+		rest, ok := strings.CutPrefix(l, "remote:")
+		if !ok {
+			continue
+		}
+		if rest = strings.TrimSpace(rest); rest != "" {
+			lines = append(lines, rest)
+		}
+	}
+	if len(lines) > maxRemoteLines {
+		lines = lines[len(lines)-maxRemoteLines:]
+	}
+	s := strings.Join(lines, " | ")
+	if len(s) > maxRemoteReason {
+		s = s[len(s)-maxRemoteReason:]
+		for len(s) > 0 && !utf8.RuneStart(s[0]) {
+			s = s[1:]
+		}
+		s = "..." + s
+	}
+	return s
 }
 
 // parsePorcelain returns "ref summary" for every rejected ('!') line and

@@ -72,6 +72,11 @@ func (r *pairRun) syncReleases(ctx context.Context) {
 		r.stepFailed(StepReleases, start, fmt.Errorf("read release map: %w", err))
 		return
 	}
+	assetMap, err := r.e.Store.AssetMap(ctx, r.key) // dst asset id -> src asset id
+	if err != nil {
+		r.stepFailed(StepReleases, start, fmt.Errorf("read asset map: %w", err))
+		return
+	}
 	ours := make(map[int64]int64, len(relMap)) // dst id -> src id
 	for s, d := range relMap {
 		ours[d] = s
@@ -136,7 +141,7 @@ func (r *pairRun) syncReleases(ctx context.Context) {
 			}
 			dr = nr
 		}
-		r.syncAssets(ctx, srp, drp, &sr, dr, t)
+		r.syncAssets(ctx, srp, drp, &sr, dr, assetMap, t)
 	}
 
 	for i := range dstRels {
@@ -162,6 +167,11 @@ func (r *pairRun) syncReleases(ctx context.Context) {
 		if err := r.e.Store.DeleteReleaseMapping(context.WithoutCancel(ctx), r.key, srcID); err != nil {
 			t.fail("forget release mapping for %s: %v", d.Tag, err)
 		}
+		for _, a := range d.Assets {
+			if err := r.e.Store.DeleteAssetMapping(context.WithoutCancel(ctx), r.key, a.ID); err != nil {
+				t.fail("forget asset mapping for %s/%s: %v", d.Tag, a.Name, err)
+			}
+		}
 	}
 
 	switch {
@@ -174,8 +184,14 @@ func (r *pairRun) syncReleases(ctx context.Context) {
 	}
 }
 
-// syncAssets makes dr's assets match sr's.
-func (r *pairRun) syncAssets(ctx context.Context, srp, drp forge.ReleaseProvider, sr, dr *forge.Release, t *releaseTally) {
+// syncAssets makes dr's assets match sr's. A destination asset is kept only
+// when its name and size match and assetMap (destination asset id to source
+// asset id, updated in place) says it was copied from the current source
+// asset, so a source asset replaced by a same-size file is re-copied. A
+// matching destination asset with no recorded origin (adopted repository,
+// or state from before asset tracking) is trusted once and recorded.
+func (r *pairRun) syncAssets(ctx context.Context, srp, drp forge.ReleaseProvider, sr, dr *forge.Release, assetMap map[int64]int64, t *releaseTally) {
+	wctx := context.WithoutCancel(ctx)
 	max := r.e.maxAssetSize()
 	have := map[string]forge.Asset{}
 	for _, a := range dr.Assets {
@@ -190,7 +206,20 @@ func (r *pairRun) syncAssets(ctx context.Context, srp, drp forge.ReleaseProvider
 		}
 		cur, exists := have[a.Name]
 		if exists && cur.Size == a.Size {
-			continue
+			srcID, known := assetMap[cur.ID]
+			if known && srcID == a.ID {
+				continue
+			}
+			if !known {
+				if !r.dry() {
+					if err := r.e.Store.SetAssetMapping(wctx, r.key, cur.ID, a.ID); err != nil {
+						t.fail("record asset mapping for %s/%s: %v", sr.Tag, a.Name, err)
+					} else {
+						assetMap[cur.ID] = a.ID
+					}
+				}
+				continue
+			}
 		}
 		if exists {
 			r.action("replace asset %s/%s", sr.Tag, a.Name)
@@ -199,6 +228,10 @@ func (r *pairRun) syncAssets(ctx context.Context, srp, drp forge.ReleaseProvider
 					t.fail("delete outdated asset %s/%s: %v", sr.Tag, a.Name, err)
 					continue
 				}
+				if err := r.e.Store.DeleteAssetMapping(wctx, r.key, cur.ID); err != nil {
+					t.fail("forget asset mapping for %s/%s: %v", sr.Tag, a.Name, err)
+				}
+				delete(assetMap, cur.ID)
 			}
 			t.replaced++
 		} else {
@@ -208,11 +241,19 @@ func (r *pairRun) syncAssets(ctx context.Context, srp, drp forge.ReleaseProvider
 			t.uploaded++
 			continue
 		}
-		if err := r.copyAsset(ctx, srp, drp, dr.ID, a); err != nil {
+		na, err := r.copyAsset(ctx, srp, drp, dr.ID, a)
+		if err != nil {
 			t.fail("upload asset %s/%s: %v", sr.Tag, a.Name, err)
 			continue
 		}
 		t.uploaded++
+		if na != nil {
+			if err := r.e.Store.SetAssetMapping(wctx, r.key, na.ID, a.ID); err != nil {
+				t.fail("record asset mapping for %s/%s: %v", sr.Tag, a.Name, err)
+			} else {
+				assetMap[na.ID] = a.ID
+			}
+		}
 	}
 	for _, a := range dr.Assets {
 		if want[a.Name] {
@@ -224,20 +265,23 @@ func (r *pairRun) syncAssets(ctx context.Context, srp, drp forge.ReleaseProvider
 				t.fail("delete asset %s/%s: %v", dr.Tag, a.Name, err)
 				continue
 			}
+			if err := r.e.Store.DeleteAssetMapping(wctx, r.key, a.ID); err != nil {
+				t.fail("forget asset mapping for %s/%s: %v", dr.Tag, a.Name, err)
+			}
+			delete(assetMap, a.ID)
 		}
 		t.assetsDeleted++
 	}
 }
 
 // copyAsset streams one asset from the source straight into the destination
-// without buffering it in memory.
-func (r *pairRun) copyAsset(ctx context.Context, srp, drp forge.ReleaseProvider, dstReleaseID int64, a forge.Asset) error {
+// without buffering it in memory, returning the new destination asset.
+func (r *pairRun) copyAsset(ctx context.Context, srp, drp forge.ReleaseProvider, dstReleaseID int64, a forge.Asset) (*forge.Asset, error) {
 	rc, err := srp.DownloadAsset(ctx, r.src.Owner, r.src.Name, a)
 	if err != nil {
-		return fmt.Errorf("download: %w", err)
+		return nil, fmt.Errorf("download: %w", err)
 	}
 	defer rc.Close()
-	_, err = drp.UploadAsset(ctx, r.p.DstOwner, r.p.DstName, dstReleaseID,
+	return drp.UploadAsset(ctx, r.p.DstOwner, r.p.DstName, dstReleaseID,
 		forge.Asset{Name: a.Name, Size: a.Size, ContentType: a.ContentType}, rc)
-	return err
 }
