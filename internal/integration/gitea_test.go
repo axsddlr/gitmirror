@@ -10,7 +10,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -496,12 +495,6 @@ func randomBytes(t *testing.T, n int) []byte {
 		t.Fatal(err)
 	}
 	return b
-}
-
-func randomName(prefix string) string {
-	b := make([]byte, 3)
-	_, _ = rand.Read(b)
-	return prefix + "-" + hex.EncodeToString(b)
 }
 
 // ---- gitmirror wiring ----

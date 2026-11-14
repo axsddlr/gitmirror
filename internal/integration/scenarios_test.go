@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net"
@@ -140,8 +141,13 @@ func (s *suite) testAPIContract(t *testing.T) {
 	data := randomBytes(t, 4321)
 	var mp bytes.Buffer
 	mw := multipart.NewWriter(&mp)
-	part, _ := mw.CreateFormFile("attachment", "part-filename.bin")
-	part.Write(data)
+	part, err := mw.CreateFormFile("attachment", "part-filename.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write(data); err != nil {
+		t.Fatal(err)
+	}
 	mw.Close()
 	req, _ := http.NewRequest(http.MethodPost, a.url+"/api/v1/repos/alice/api-rel/releases/"+itoa(rel.ID)+"/assets?name=query-name.bin", &mp)
 	req.Header.Set("Authorization", "token "+a.token)
@@ -660,9 +666,19 @@ func (s *suite) testLFS(t *testing.T) {
 	if !bytes.Equal(got, data) {
 		t.Fatalf("B clone big.bin: %d bytes (pointer? %v), want %d bytes", len(got), bytes.HasPrefix(got, []byte("version https://git-lfs")), len(data))
 	}
-	if got := b.media(t, "mirrors", "s5", "big.bin"); !bytes.Equal(got, data) {
-		t.Fatalf("B media: %d bytes", len(got))
-	}
+	// Gitea clears a new repository's "empty" flag asynchronously after the
+	// first push, so the media endpoint may briefly answer 404 "repository is
+	// empty" even though the clone above already has the content.
+	eventually(t, "B media big.bin", func() (bool, string) {
+		code, got := b.api(t, http.MethodGet, "/repos/mirrors/s5/media/big.bin", nil)
+		if code != http.StatusOK {
+			return false, fmt.Sprintf("%d %s", code, got)
+		}
+		if !bytes.Equal(got, data) {
+			t.Fatalf("B media: %d bytes, want %d", len(got), len(data))
+		}
+		return true, ""
+	})
 }
 
 // media fetches a file's content through the LFS-resolving media endpoint.
