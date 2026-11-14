@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"path"
 	"regexp"
@@ -38,6 +39,12 @@ func (c *Config) Validate() error {
 		add("concurrency: %d is out of range 1..64", c.Concurrency)
 	}
 
+	if ml := c.Server.MetricsListen; ml != "" && ml != "off" {
+		if _, _, err := net.SplitHostPort(ml); err != nil {
+			add("server.metrics_listen: %q is not a host:port address or \"off\"", ml)
+		}
+	}
+
 	names := make([]string, 0, len(c.Forges))
 	for n := range c.Forges {
 		names = append(names, n)
@@ -48,6 +55,7 @@ func (c *Config) Validate() error {
 	}
 
 	validateSettings("defaults", c.Defaults.Interval, c.Defaults.Include, c.Defaults.Visibility, c.Defaults.OnSourceDeleted, c.Defaults.DeletionGrace, true, add)
+	validateDeletionGuard("defaults", c.Defaults.MaxRefDeletions, c.Defaults.MaxRefDeletionsPercent, add)
 
 	if len(c.Rules) == 0 {
 		add("rules: at least one rule is required")
@@ -115,6 +123,17 @@ func validateSettings(loc, interval string, include []string, visibility, onDele
 		} else if d < minGrace {
 			add("%s: deletion_grace %s is below the minimum of %s", loc, grace, minGrace)
 		}
+	}
+}
+
+// validateDeletionGuard checks the mass ref deletion guard settings (nil
+// means unset).
+func validateDeletionGuard(loc string, count, percent *int, add func(string, ...any)) {
+	if count != nil && *count < 0 {
+		add("%s: max_ref_deletions %d must be >= 0", loc, *count)
+	}
+	if percent != nil && (*percent < 1 || *percent > 100) {
+		add("%s: max_ref_deletions_percent %d is out of range 1..100", loc, *percent)
 	}
 }
 
@@ -219,6 +238,9 @@ func (c *Config) validateRule(r Rule, seen map[string]int, idx int, add func(str
 
 	validateSettings("", r.Interval, r.Include, r.Visibility, r.OnSourceDeleted, r.DeletionGrace, false, func(f string, a ...any) {
 		// Strip the empty "loc: " prefix produced for rule-level settings.
+		add("%s", strings.TrimPrefix(fmt.Sprintf(f, a...), ": "))
+	})
+	validateDeletionGuard("", r.MaxRefDeletions, r.MaxRefDeletionsPercent, func(f string, a ...any) {
 		add("%s", strings.TrimPrefix(fmt.Sprintf(f, a...), ": "))
 	})
 }

@@ -54,7 +54,7 @@ func (c *Cache) lock(ctx context.Context, dir string, timeout time.Duration) (fu
 	unlockProc := func() { <-sem }
 
 	path := dir + ".lock"
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		unlockProc()
 		return nil, fmt.Errorf("gitx: lock: %w", err)
 	}

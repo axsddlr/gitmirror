@@ -190,7 +190,8 @@ func (s *Server) runJob(ctx context.Context, lane string, j Job) {
 
 // rememberResolve stores, per rule of a full (unfiltered) sync, the pairs
 // that resolve produced; webhooks are routed with it. Filtered syncs carry
-// only the filtered pairs, so they never update it.
+// only the filtered pairs, so they never update it. A rule whose resolve
+// failed or was incomplete keeps its previous pairs.
 func (s *Server) rememberResolve(rules []string, res resolve.Result) {
 	by := map[string][]resolve.Pair{}
 	for _, p := range res.Pairs {
@@ -198,7 +199,17 @@ func (s *Server) rememberResolve(rules []string, res resolve.Result) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	failed := map[string]bool{}
+	for _, e := range res.Errors {
+		failed[e.Rule] = true
+	}
 	for _, r := range rules {
+		// A rule that errored or listed incompletely keeps its last good
+		// pairs, so its webhooks still route; it only gets this partial
+		// result if it has nothing better.
+		if _, have := s.lastResolve[r]; have && (failed[r] || !res.Complete[r]) {
+			continue
+		}
 		s.lastResolve[r] = by[r]
 	}
 }

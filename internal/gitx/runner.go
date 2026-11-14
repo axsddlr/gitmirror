@@ -75,8 +75,18 @@ func (r *Runner) timeout() time.Duration {
 type spec struct {
 	gitDir string   // passed as --git-dir and used as working directory
 	auth   []Remote // remotes whose credentials this command may use
+	cfg    []string // extra "key=value" config passed with -c before args
 	args   []string // subcommand and its arguments
 }
+
+// baseConfig is passed with -c to every git command (and, through git's
+// config, every git-lfs command). credential.helper= keeps credential
+// helpers from supplying or storing anything. http.followRedirects=false
+// stops git from following a redirect to another host, which would send
+// the origin-scoped auth header (applied to the whole session) there too.
+// git-lfs does its own redirect handling and drops Authorization on a
+// cross-host redirect.
+var baseConfig = []string{"credential.helper=", "http.followRedirects=false"}
 
 // cmdError is a git failure whose stderr has already been scrubbed.
 type cmdError struct {
@@ -144,7 +154,10 @@ func (r *Runner) run(ctx context.Context, s spec) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	argv := []string{"-c", "credential.helper="}
+	var argv []string
+	for _, kv := range append(append([]string(nil), baseConfig...), s.cfg...) {
+		argv = append(argv, "-c", kv)
+	}
 	if s.gitDir != "" {
 		argv = append(argv, "--git-dir="+s.gitDir)
 	}

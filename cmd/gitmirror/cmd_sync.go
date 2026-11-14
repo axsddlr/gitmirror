@@ -15,20 +15,21 @@ import (
 
 func (c *cli) syncCmd() *cobra.Command {
 	var rules, repos []string
-	var dryRun bool
+	var dryRun, allowPrune bool
 	var lockTimeout time.Duration
 	cmd := &cobra.Command{
 		Use:   "sync",
 		Short: "Mirror every pair now",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return c.runSync(cmd, rules, repos, dryRun, false, lockTimeout)
+			return c.runSync(cmd, app.SyncRequest{Rules: rules, Repos: repos, DryRun: dryRun, AllowPrune: allowPrune}, false, lockTimeout)
 		},
 	}
 	fl := cmd.Flags()
 	fl.StringArrayVar(&rules, "rule", nil, "only sync this rule (repeatable)")
 	fl.StringArrayVar(&repos, "repo", nil, "only sync this source repo, OWNER/NAME (repeatable; skips reconcile)")
 	fl.BoolVar(&dryRun, "dry-run", false, "compute and print what would change without writing anything")
+	fl.BoolVar(&allowPrune, "allow-prune", false, "this run only: delete destination branches/tags even beyond the max_ref_deletions guard")
 	fl.DurationVar(&lockTimeout, "lock-timeout", 0, "wait this long for another gitmirror process to release the state dir (0 = fail at once)")
 	return cmd
 }
@@ -40,7 +41,7 @@ func (c *cli) planCmd() *cobra.Command {
 		Short: "Show what a sync would do, without changing anything",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return c.runSync(cmd, rules, repos, true, true, 0)
+			return c.runSync(cmd, app.SyncRequest{Rules: rules, Repos: repos, DryRun: true}, true, 0)
 		},
 	}
 	fl := cmd.Flags()
@@ -51,7 +52,9 @@ func (c *cli) planCmd() *cobra.Command {
 
 // runSync builds the App and syncs. plan builds it read-only (no state dir
 // lock, nothing written), so it can run next to a serve or sync process.
-func (c *cli) runSync(cmd *cobra.Command, rules, repos []string, dryRun, plan bool, lockTimeout time.Duration) error {
+func (c *cli) runSync(cmd *cobra.Command, req app.SyncRequest, plan bool, lockTimeout time.Duration) error {
+	req.Trigger = "cli"
+	dryRun := req.DryRun
 	cfg, err := c.loadConfigOrExit()
 	if err != nil {
 		return err
@@ -65,7 +68,7 @@ func (c *cli) runSync(cmd *cobra.Command, rules, repos []string, dryRun, plan bo
 		return &exitError{exitFailed, err}
 	}
 	defer a.Close()
-	res, err := a.Sync(cmd.Context(), rules, repos, dryRun, "cli")
+	res, err := a.SyncWith(cmd.Context(), req)
 	if err != nil {
 		if errors.Is(err, app.ErrNoMatch) {
 			return &exitError{exitUsage, err}

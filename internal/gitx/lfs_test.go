@@ -72,8 +72,9 @@ func TestSyncLFSOverFileRemotes(t *testing.T) {
 		t.Fatalf("lfs push args = %q", push)
 	}
 
-	// Nothing changed: LFS step is skipped and LFSObjects is unknown.
-	res = f.sync(SyncOptions{LFS: true})
+	// Nothing changed and LFS already done for these refs: LFS step is
+	// skipped and LFSObjects is unknown.
+	res = f.sync(SyncOptions{LFS: true, LFSDigest: Digest(res.SrcRefs)})
 	if res.Changed || res.LFSObjects != -1 {
 		t.Fatalf("unchanged LFS run: Changed=%v LFSObjects=%d", res.Changed, res.LFSObjects)
 	}

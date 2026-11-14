@@ -192,6 +192,10 @@ func newFixture(t *testing.T) *fixture {
 }
 
 func newFixtureSecret(t *testing.T, hookSecret string) *fixture {
+	return newFixtureTmpl(t, hookSecret, cfgTmpl)
+}
+
+func newFixtureTmpl(t *testing.T, hookSecret, tmpl string) *fixture {
 	t.Helper()
 	home := t.TempDir()
 	f := &fixture{
@@ -208,7 +212,7 @@ func newFixtureSecret(t *testing.T, hookSecret string) *fixture {
 		stateDir: filepath.Join(t.TempDir(), "state"),
 		clock:    newFakeClock(),
 	}
-	y := strings.NewReplacer("@STATE@", filepath.ToSlash(f.stateDir), "@TOKEN@", sentinel, "@SECRET@", hookSecret).Replace(cfgTmpl)
+	y := strings.NewReplacer("@STATE@", filepath.ToSlash(f.stateDir), "@TOKEN@", sentinel, "@SECRET@", hookSecret).Replace(tmpl)
 	cfg, err := config.Parse([]byte(y), func(string) (string, bool) { return "", false },
 		func(string) ([]byte, error) { return nil, os.ErrNotExist })
 	if err != nil {

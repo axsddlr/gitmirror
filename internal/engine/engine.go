@@ -87,6 +87,10 @@ type Options struct {
 	// Trigger records what started the run: "cli", "schedule" or "webhook".
 	// Empty means "cli".
 	Trigger string
+	// AllowPrune bypasses the mass ref deletion guard (the rule's
+	// MaxRefDeletions / MaxRefDeletionsPercent) for this run. The bypass is
+	// logged and recorded in the git step detail.
+	AllowPrune bool
 }
 
 func (o Options) trigger() string {

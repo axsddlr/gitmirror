@@ -25,7 +25,7 @@ import (
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite" // pure-Go sqlite driver ("sqlite")
+	"modernc.org/sqlite" // pure-Go sqlite driver ("sqlite")
 )
 
 //go:embed migrations/*.sql
@@ -104,6 +104,9 @@ type PairState struct {
 	LastAttempt         time.Time
 	LastError           string
 	ConsecutiveFailures int
+	// LFSDigest is the source ref digest for which LFS objects were last
+	// copied to the destination ("" if never).
+	LFSDigest string
 }
 
 // Run is one recorded sync run of a pair.
@@ -132,7 +135,7 @@ func (s *Store) SetClock(f func() time.Time) { s.now = f }
 // migrations.
 func Open(ctx context.Context, path string) (*Store, error) {
 	if dir := filepath.Dir(path); dir != "" {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return nil, fmt.Errorf("state: create dir: %w", err)
 		}
 	}
@@ -143,7 +146,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	}
 	db.SetMaxOpenConns(1)
 	s := &Store{db: db, now: time.Now}
-	if err := db.PingContext(ctx); err != nil {
+	if err := pingRetryBusy(ctx, db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("state: open: %w", err)
 	}
@@ -152,6 +155,33 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		return nil, err
 	}
 	return s, nil
+}
+
+// openBusyWait bounds how long Open retries a connection whose setup
+// pragmas hit SQLITE_BUSY. Switching a brand new database to WAL takes an
+// exclusive lock without consulting busy_timeout, so two processes opening
+// it at the same moment can collide.
+const openBusyWait = 5 * time.Second
+
+// sqliteBusy is SQLite's primary result code SQLITE_BUSY.
+const sqliteBusy = 5
+
+func pingRetryBusy(ctx context.Context, db *sql.DB) error {
+	deadline := time.Now().Add(openBusyWait)
+	for {
+		err := db.PingContext(ctx)
+		var se *sqlite.Error
+		if err == nil || !errors.As(err, &se) || se.Code()&0xff != sqliteBusy || time.Now().After(deadline) {
+			return err
+		}
+		t := time.NewTimer(25 * time.Millisecond)
+		select {
+		case <-t.C:
+		case <-ctx.Done():
+			t.Stop()
+			return err
+		}
+	}
 }
 
 // Close closes the database.
@@ -190,12 +220,37 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if _, err := s.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
+	// Another process (e.g. a read-only plan next to serve) may open the
+	// same fresh database at the same moment. BEGIN IMMEDIATE takes the
+	// write lock up front (waiting up to busy_timeout), and the version is
+	// read inside that transaction, so each migration is applied once.
+	// An up-to-date database (the common case) is detected without taking
+	// the write lock.
+	var pre int
+	if len(ms) > 0 && s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&pre) == nil &&
+		pre == ms[len(ms)-1].version {
+		return nil
+	}
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("state: migrate: %w", err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		return fmt.Errorf("state: migrate: begin: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			conn.ExecContext(context.WithoutCancel(ctx), `ROLLBACK`)
+		}
+	}()
+	if _, err := conn.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
 		version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)`); err != nil {
 		return fmt.Errorf("state: schema_migrations: %w", err)
 	}
 	var cur int
-	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&cur); err != nil {
+	if err := conn.QueryRowContext(ctx, `SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&cur); err != nil {
 		return fmt.Errorf("state: read schema version: %w", err)
 	}
 	if len(ms) == 0 && cur > 0 || len(ms) > 0 && cur > ms[len(ms)-1].version {
@@ -205,23 +260,18 @@ func (s *Store) migrate(ctx context.Context) error {
 		if m.version <= cur {
 			continue
 		}
-		tx, err := s.db.BeginTx(ctx, nil)
-		if err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx, m.sql); err != nil {
-			tx.Rollback()
+		if _, err := conn.ExecContext(ctx, m.sql); err != nil {
 			return fmt.Errorf("state: migration %04d: %w", m.version, err)
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)`,
+		if _, err := conn.ExecContext(ctx, `INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)`,
 			m.version, s.now().UnixNano()); err != nil {
-			tx.Rollback()
-			return err
-		}
-		if err := tx.Commit(); err != nil {
-			return err
+			return fmt.Errorf("state: migration %04d: %w", m.version, err)
 		}
 	}
+	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
+		return fmt.Errorf("state: migrate: commit: %w", err)
+	}
+	committed = true
 	return nil
 }
 
@@ -271,7 +321,7 @@ func (s *Store) ReleaseOwnership(ctx context.Context, dstForge, dstRepo string) 
 }
 
 const pairCols = `rule, src_forge, src_repo, dst_forge, dst_repo, last_digest, last_ref_count,
-	last_success, last_attempt, last_error, consecutive_failures`
+	last_success, last_attempt, last_error, consecutive_failures, lfs_digest`
 
 type scanner interface{ Scan(...any) error }
 
@@ -279,7 +329,7 @@ func scanPair(r scanner) (PairState, error) {
 	var p PairState
 	var succ, att int64
 	err := r.Scan(&p.Key.Rule, &p.Key.SrcForge, &p.Key.SrcRepo, &p.Key.DstForge, &p.Key.DstRepo,
-		&p.LastDigest, &p.LastRefCount, &succ, &att, &p.LastError, &p.ConsecutiveFailures)
+		&p.LastDigest, &p.LastRefCount, &succ, &att, &p.LastError, &p.ConsecutiveFailures, &p.LFSDigest)
 	p.LastSuccess, p.LastAttempt = fromNanos(succ), fromNanos(att)
 	return p, err
 }
@@ -391,6 +441,20 @@ func (s *Store) FinishRun(ctx context.Context, id int64, status RunStatus, steps
 		return err
 	}
 	return tx.Commit()
+}
+
+// SetLFSDigest records that LFS objects have been copied to the destination
+// for the source refs with the given digest. The pair must exist (StartRun
+// creates it). FinishRun leaves it unchanged.
+func (s *Store) SetLFSDigest(ctx context.Context, k PairKey, digest string) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE pairs SET lfs_digest = ? WHERE key = ?`, digest, k.String())
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return fmt.Errorf("state: pair %s not found", k)
+	}
+	return nil
 }
 
 func (s *Store) queryRuns(ctx context.Context, where string, limit int, args ...any) ([]Run, error) {

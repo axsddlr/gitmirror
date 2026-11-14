@@ -52,11 +52,17 @@ func (e *testEnv) holdLock() *app.App {
 // withServer appends a server section to the test config.
 func (e *testEnv) withServer(listen, secret string) {
 	e.t.Helper()
+	e.withServerMetrics(listen, secret, "off")
+}
+
+// withServerMetrics is withServer with an explicit server.metrics_listen.
+func (e *testEnv) withServerMetrics(listen, secret, metrics string) {
+	e.t.Helper()
 	b, err := os.ReadFile(e.cfgPath)
 	if err != nil {
 		e.t.Fatal(err)
 	}
-	s := string(b) + "server:\n  listen: '" + listen + "'\n"
+	s := string(b) + "server:\n  listen: '" + listen + "'\n  metrics_listen: '" + metrics + "'\n"
 	if secret != "" {
 		s += "  webhook_secret: '" + secret + "'\n"
 	}
@@ -185,5 +191,56 @@ func TestServeEndToEnd(t *testing.T) {
 	}
 	if strings.Contains(se.String()+so.String(), sentinel) {
 		t.Fatal("token printed")
+	}
+}
+
+var metricsAddrRe = regexp.MustCompile(`metrics listening.*addr=(127\.0\.0\.1:\d+)`)
+
+func TestServeMetricsOnSeparateListener(t *testing.T) {
+	e := newTestEnv(t)
+	e.addSource("alice", "a")
+	e.withServerMetrics("127.0.0.1:0", "", "127.0.0.1:0")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var so, se syncBuffer
+	done := make(chan int, 1)
+	go func() {
+		done <- run(ctx, []string{"--config", e.cfgPath, "serve", "--shutdown-timeout", "30s"}, &so, &se, func(string) (string, bool) { return "", false })
+	}()
+	var mainAddr, metrics string
+	deadline := time.Now().Add(30 * time.Second)
+	for mainAddr == "" || metrics == "" {
+		if m := addrRe.FindStringSubmatch(se.String()); m != nil {
+			mainAddr = m[1]
+		}
+		if m := metricsAddrRe.FindStringSubmatch(se.String()); m != nil {
+			metrics = m[1]
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("addresses not logged\nstderr:\n%s", se.String())
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	code := func(url string) int {
+		resp, err := http.Get(url)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	if c := code("http://" + metrics + "/metrics"); c != http.StatusOK {
+		t.Fatalf("metrics listener /metrics = %d", c)
+	}
+	if c := code("http://" + mainAddr + "/metrics"); c != http.StatusNotFound {
+		t.Fatalf("main listener /metrics = %d", c)
+	}
+	cancel()
+	select {
+	case c := <-done:
+		wantCode(t, c, 0, so.String(), se.String())
+	case <-time.After(60 * time.Second):
+		t.Fatal("serve did not exit after cancel")
 	}
 }

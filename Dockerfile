@@ -43,6 +43,8 @@ ENV HOME=/data \
 USER gitmirror:gitmirror
 WORKDIR /data
 VOLUME /data
+# /metrics is on server.metrics_listen (default 127.0.0.1:9090, unreachable from outside the
+# container); set it to ":9090" for scraping and do not publish that port.
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \

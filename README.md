@@ -32,6 +32,15 @@ destroy data.
   allow it (the adopted repository is then pruned like any mirror: refs missing at the source are removed).
 * **Empty-source guard.** If a source that used to have branches or tags suddenly reports none, the
   run is aborted and the destination is not pruned.
+* **Mass ref deletion guard.** A run that would delete more than `max_ref_deletions` (default 5)
+  destination branches/tags **and** more than `max_ref_deletions_percent` (default 50) percent of
+  them is aborted before anything is pushed. If the source really dropped them, run
+  `gitmirror sync --allow-prune` once (logged, and noted in the git step detail).
+* **Mirrored content cannot steer git-lfs.** LFS transfers are pinned to the source's and
+  destination's own LFS endpoints; a `.lfsconfig` in a mirrored repository is ignored.
+* **No cross-host redirects.** git does not follow HTTP redirects (`http.followRedirects=false`),
+  so a redirecting forge cannot receive the token meant for another host; git-lfs drops the
+  `Authorization` header when it is redirected to another host.
 * **`deletion_grace`.** A source repository must keep reporting "not found" for the grace period
   (default 24h, minimum 1h) before `on_source_deleted` (`keep` / `archive` / `delete`) is applied,
   because forges also answer "not found" when a token merely lost access. `delete` only ever removes
@@ -49,6 +58,7 @@ destroy data.
   `url.<x>.insteadOf`, `http.extraHeader` or hook setting there cannot redirect or alter mirroring
   (opt out with `git: {use_host_config: true}`).
 * **State-dir lock.** Only one gitmirror process can use a state directory at a time (OS file lock).
+  The state directory and cache directories are created with mode `0700`, the lock file `0600`.
 * **Secret redaction.** Tokens are never printed in logs, errors or config dumps; error messages from
   `${VAR}` interpolation name the variable, never its value. `token_file` / `webhook_secret_file` keep
   secrets out of the config file.
@@ -144,7 +154,7 @@ Usage:
 Available Commands:
   help        Help about any command
   plan        Show what a sync would do, without changing anything
-  serve       Run the daemon: scheduled syncs, webhooks, /healthz, /readyz and /metrics
+  serve       Run the daemon: scheduled syncs, webhooks, /healthz, /readyz and /metrics (own listener)
   status      Show the last known state of every pair (no network)
   sync        Mirror every pair now
   validate    Check the config, git, forge credentials and rule listings
@@ -162,7 +172,7 @@ Command-specific flags:
 
 | Command | Flags |
 |---|---|
-| `sync` | `--dry-run`, `--lock-timeout <duration>`, `--repo OWNER/NAME` (repeatable; skips reconcile), `--rule NAME` (repeatable) |
+| `sync` | `--allow-prune` (this run only: bypass the mass ref deletion guard), `--dry-run`, `--lock-timeout <duration>`, `--repo OWNER/NAME` (repeatable; skips reconcile), `--rule NAME` (repeatable) |
 | `plan` | `--repo OWNER/NAME` (repeatable), `--rule NAME` (repeatable); read-only, does not take the state-dir lock |
 | `validate` | `--offline` (config and local tools only, no network) |
 | `status` | `--runs N` (also list the N most recent runs), `--audit N` (also list the N most recent audit events: destination create, adopt, archive, delete) |
@@ -203,8 +213,13 @@ everything in sync.
 |---|---|
 | `GET /healthz` | `200 ok` while the process is up. |
 | `GET /readyz` | `200 ready` once started, `503` during shutdown. |
-| `GET /metrics` | Prometheus text format (plus standard Go and process collectors). |
 | `POST /webhook/<forge>` | Webhook receiver. |
+
+`GET /metrics` (Prometheus text format, plus standard Go and process collectors) is **not** served
+on that listener, because it is unauthenticated and its labels contain repository and rule names.
+It is served on its own listener, `server.metrics_listen` (default `127.0.0.1:9090`; `off` disables
+metrics). In Docker set `metrics_listen: ":9090"` and keep port 9090 unpublished (reachable only
+from your monitoring network).
 
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|
@@ -269,6 +284,11 @@ Not yet confirmed: whether GitHub rejects a push that touches `.github/workflows
 * **`git-lfs` not found.** If `include` has `lfs` but `git-lfs` is not installed, the lfs step is
   recorded as skipped (a warning is logged) and only git is mirrored. Install `git-lfs` (it is in the
   Docker image) or remove `lfs` from `include`. `gitmirror validate` reports the versions it finds.
+  Once LFS works again, the next run copies the missing LFS objects even if no ref changed (the
+  state store remembers for which refs LFS last completed).
+* **"sync would delete N of M destination refs ... refusing to push".** The mass ref deletion guard
+  tripped. Check the source; if the deletions are intended, run `gitmirror sync --allow-prune` once
+  (optionally with `--repo OWNER/NAME`), or raise `max_ref_deletions` / `max_ref_deletions_percent`.
 * **"source has no refs but previously had N; refusing to prune destination".** The empty-source guard
   tripped (outage, lost access or a truly emptied repo). Investigate; the destination was not touched.
 * **`forges.<name>.token: ${VAR} resolved to an empty value`** (same for `server.webhook_secret`): the

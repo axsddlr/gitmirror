@@ -62,6 +62,13 @@ defaults:
   # Delete destination releases that no longer exist at the source
   # (only releases gitmirror created). Default: false.
   delete_missing_releases: false
+  # Mass ref deletion guard: a run that would delete more than
+  # max_ref_deletions branches/tags AND more than max_ref_deletions_percent
+  # percent of the destination's branches/tags is aborted before pushing.
+  # `gitmirror sync --allow-prune` bypasses it once. Defaults: 5 and 50.
+  # max_ref_deletions >= 0; max_ref_deletions_percent 1..100.
+  max_ref_deletions: 5
+  max_ref_deletions_percent: 50
 
 # --------------------------------------------------------------------------
 # Server settings for `gitmirror serve` (webhooks, /healthz, /readyz, /metrics).
@@ -69,6 +76,11 @@ defaults:
 server:
   # Listen address. Default ":8080".
   listen: ":8080"
+  # Where /metrics is served, on its own listener (it is unauthenticated and its labels
+  # name private repositories and rules, so it is never on `listen`). Default
+  # "127.0.0.1:9090"; "off" disables metrics. In Docker use ":9090" and do not publish
+  # that port.
+  metrics_listen: "127.0.0.1:9090"
   # Shared secret that signs webhook deliveries. When neither webhook_secret nor
   # webhook_secret_file is set, POST /webhook/<forge> answers 404 (disabled).
   # Set at most one of the two.
@@ -92,7 +104,8 @@ git:
 # `from` takes exactly one of owner / starred_by / repo.
 # `to` takes exactly one of owner (+ optional name template) / repo.
 # Per-rule keys override `defaults`: interval, include, visibility,
-# on_source_deleted, deletion_grace, delete_missing_releases. `adopt` is rule-only.
+# on_source_deleted, deletion_grace, delete_missing_releases, max_ref_deletions,
+# max_ref_deletions_percent. `adopt` is rule-only.
 # --------------------------------------------------------------------------
 rules:
   # 1. Owner rule: mirror every repo of a user/org (GitHub -> Gitea).

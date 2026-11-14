@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"gitmirror/internal/config"
 	"gitmirror/internal/forge"
 	"gitmirror/internal/gitx"
 	"gitmirror/internal/resolve"
@@ -345,6 +346,7 @@ func (r *pairRun) syncGit(ctx context.Context) bool {
 		return gitFail(fmt.Errorf("read pair state: %w", err))
 	}
 	cache := &gitx.Cache{Dir: r.e.cacheDir(r.key, false), R: r.e.git(), Logger: r.e.logger()}
+	var bypass string
 	res, err := cache.Sync(ctx, src, r.dstRemote(), gitx.SyncOptions{
 		Prune:            true,
 		LFS:              lfsOK,
@@ -353,7 +355,32 @@ func (r *pairRun) syncGit(ctx context.Context) bool {
 		// Forges like Gitea make the first pushed branch the default of an
 		// empty repository: push the source's default first.
 		FirstBranch: r.src.DefaultBranch,
+		CheckDeletions: func(deleted []string, dstTotal int) error {
+			md := r.massDeletion(len(deleted), dstTotal)
+			if md == nil {
+				return nil
+			}
+			if r.opt.AllowPrune {
+				bypass = fmt.Sprintf("deletion guard bypassed (--allow-prune): %d of %d refs", md.n, md.total)
+				r.log.Warn("engine: mass ref deletion allowed by --allow-prune", "deleted", md.n, "destination_refs", md.total)
+				return nil
+			}
+			return md
+		},
+		// LFS objects are re-sent when the refs they were last copied for
+		// differ from the source's, even if no ref changed (heals refs that
+		// were pushed without LFS).
+		LFSDigest: prev.LFSDigest,
 	})
+	if md := (*massDeletionError)(nil); errors.As(err, &md) {
+		r.aborted = true
+		r.err = md
+		r.action("refuse to sync: %v", md)
+		r.record(StepGit, start, state.StepFailed, md.Error())
+		recordLFS(state.StepSkipped, "git step did not complete")
+		r.log.Warn("engine: mass ref deletion guard tripped", "deleted", md.n, "destination_refs", md.total)
+		return false
+	}
 	if errors.Is(err, gitx.ErrEmptySource) {
 		r.aborted = true
 		r.err = fmt.Errorf("source has no refs but previously had %d; refusing to prune destination", prev.LastRefCount)
@@ -368,6 +395,10 @@ func (r *pairRun) syncGit(ctx context.Context) bool {
 	}
 	r.srcRefs, r.srcRefsKnown = res.SrcRefs, true
 	counts := fmt.Sprintf("%d created, %d updated, %d deleted", len(res.Created), len(res.Updated), len(res.Deleted))
+	if bypass != "" {
+		counts += "; " + bypass
+	}
+	digest := gitx.Digest(res.SrcRefs)
 	switch {
 	case res.Changed:
 		r.action("push %s refs", counts)
@@ -382,18 +413,55 @@ func (r *pairRun) syncGit(ctx context.Context) bool {
 	case !lfsOK:
 		lfsMissing()
 	case r.dry():
+		if digest != "" && (res.Changed || digest != prev.LFSDigest) {
+			r.action("transfer LFS objects")
+		}
 		recordLFS(state.StepSkipped, "dry-run")
 	case res.LFSObjects >= 0:
-		recordLFS(state.StepOK, fmt.Sprintf("%d objects in cache", res.LFSObjects))
+		detail := fmt.Sprintf("%d objects in cache", res.LFSObjects)
+		if !res.Changed {
+			detail += "; refs unchanged, LFS objects not yet copied for them"
+		}
+		recordLFS(state.StepOK, detail)
+		if digest != prev.LFSDigest {
+			if err := r.e.Store.SetLFSDigest(context.WithoutCancel(ctx), r.key, digest); err != nil {
+				r.log.Warn("engine: record LFS digest", "err", err)
+			}
+		}
 	default:
 		recordLFS(state.StepUnchanged, "no transfer needed")
 	}
 	if !r.dry() {
 		r.gitDone = true
-		r.digest = gitx.Digest(res.SrcRefs)
+		r.digest = digest
 		r.refCount = len(res.SrcRefs)
 	}
 	return true
+}
+
+// massDeletionError is returned by the deletion check when a push would
+// delete too many destination refs.
+type massDeletionError struct {
+	n, total, maxRefs, maxPercent int
+}
+
+func (e *massDeletionError) Error() string {
+	return fmt.Sprintf("sync would delete %d of %d destination refs (guard: more than %d refs and more than %d%%); "+
+		"refusing to push. If the source really dropped them, run `gitmirror sync --allow-prune` once",
+		e.n, e.total, e.maxRefs, e.maxPercent)
+}
+
+// massDeletion returns a *massDeletionError when deleting n of the
+// destination's total refs exceeds both of the rule's limits, else nil.
+func (r *pairRun) massDeletion(n, total int) *massDeletionError {
+	maxRefs, maxPct := r.p.Settings.MaxRefDeletions, r.p.Settings.MaxRefDeletionsPercent
+	if maxPct == 0 {
+		maxRefs, maxPct = config.DefaultMaxRefDeletions, config.DefaultMaxRefDeletionsPercent
+	}
+	if n <= maxRefs || n*100 <= maxPct*total {
+		return nil
+	}
+	return &massDeletionError{n: n, total: total, maxRefs: maxRefs, maxPercent: maxPct}
 }
 
 // ---- settings ----

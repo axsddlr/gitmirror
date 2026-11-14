@@ -94,6 +94,20 @@ type SyncOptions struct {
 	// branch of an empty repository, so callers pass the source's default
 	// branch. It is ignored when the source has no such branch.
 	FirstBranch string
+	// CheckDeletions, when set, is called (also in a DryRun) with the
+	// destination refs the sync would delete and the destination's total
+	// number of branches and tags, before anything is written. A non-nil
+	// error aborts the sync: Sync returns it wrapped together with the
+	// computed result, and nothing is transferred. It is not called when
+	// nothing would be deleted.
+	CheckDeletions func(deleted []string, dstTotal int) error
+	// LFSDigest is the Digest of the source refs for which LFS objects are
+	// known to have been copied to the destination. With LFS set and the
+	// refs otherwise up to date, LFS objects are still fetched and pushed
+	// when the current source digest differs from it, so a destination
+	// whose refs were pushed without LFS (git-lfs missing, lfs enabled
+	// later) heals. Leave it empty to force the LFS transfer.
+	LFSDigest string
 }
 
 // SyncResult describes what a Sync found and did.
@@ -134,11 +148,14 @@ func (c *Cache) logger() *slog.Logger {
 //  2. Ensure the bare cache exists (init, or re-init if corrupt).
 //  3. Fetch src heads/tags into the cache with --prune (never --mirror, so
 //     read-only namespaces like refs/pull/* are not copied).
-//  4. Diff cache refs against ls-remote dst. Nothing differs: stop.
+//  4. Diff cache refs against ls-remote dst; with planned deletions, ask
+//     CheckDeletions (an error aborts here). Nothing differs and no LFS
+//     transfer is owed (see LFSDigest): stop.
 //  5. DryRun: stop here and report the diff.
-//  6. With LFS: lfs fetch --all from src, lfs push --all to dst. This runs
-//     before the ref push so a failed LFS transfer is retried next time
-//     instead of leaving dst with refs whose LFS objects are missing.
+//  6. With LFS: lfs fetch --all from src, lfs push --all to dst, each pinned
+//     to its remote's LFS endpoint. This runs before the ref push so a
+//     failed LFS transfer is retried next time instead of leaving dst with
+//     refs whose LFS objects are missing.
 //  7. Push heads/tags to dst (--atomic when supported, --prune if Prune).
 //
 // Sync holds an exclusive lock on Dir (in-process and via Dir+".lock"); a
@@ -211,18 +228,24 @@ func (c *Cache) sync(ctx context.Context, src, dst Remote, opt SyncOptions) (*Sy
 	res.DstRefsBefore = dstRefs
 	res.Created, res.Updated, res.Deleted = diffRefs(cacheRefs, dstRefs, opt.Prune)
 	res.Changed = len(res.Created)+len(res.Updated)+len(res.Deleted) > 0
-	if !res.Changed || opt.DryRun {
+	if len(res.Deleted) > 0 && opt.CheckDeletions != nil {
+		if err := opt.CheckDeletions(res.Deleted, len(dstRefs)); err != nil {
+			return res, fmt.Errorf("gitx: refusing to push to %s: %w", dst, err)
+		}
+	}
+	lfsHeal := opt.LFS && !res.Changed && Digest(cacheRefs) != opt.LFSDigest
+	if (!res.Changed && !lfsHeal) || opt.DryRun {
 		return res, nil
 	}
 
 	if opt.LFS {
-		if _, err := r.run(ctx, spec{gitDir: dir, auth: []Remote{src}, args: []string{"lfs", "fetch", "--all", "--", src.URL}}); err != nil {
-			return nil, fmt.Errorf("gitx: lfs fetch %s: %w", src, err)
-		}
-		if _, err := r.run(ctx, spec{gitDir: dir, auth: []Remote{dst}, args: []string{"lfs", "push", "--all", "--", dst.URL}}); err != nil {
-			return nil, onDst(fmt.Errorf("gitx: lfs push %s: %w", dst, err))
+		if err := lfsTransfer(ctx, r, dir, src, dst); err != nil {
+			return nil, err
 		}
 		res.LFSObjects = countLFSObjects(dir)
+	}
+	if !res.Changed {
+		return res, nil
 	}
 
 	if first := firstBranchRef(opt.FirstBranch, cacheRefs, dstRefs); first != "" {
@@ -234,6 +257,49 @@ func (c *Cache) sync(ctx context.Context, src, dst Remote, opt SyncOptions) (*Sy
 		return nil, err
 	}
 	return res, nil
+}
+
+// lfsTransfer copies all LFS objects reachable from the cache's refs from src
+// into the cache and from there to dst. Each command pins git-lfs to the
+// endpoint of the remote it talks to (lfs.url and lfs.pushurl given with -c
+// outrank any .lfsconfig) and resets the other keys git-lfs accepts from a
+// repository's .lfsconfig, so mirrored content cannot redirect the transfer
+// or make it skip objects.
+func lfsTransfer(ctx context.Context, r *Runner, dir string, src, dst Remote) error {
+	if _, err := r.run(ctx, spec{gitDir: dir, auth: []Remote{src}, cfg: lfsPin(src), args: []string{"lfs", "fetch", "--all", "--", src.URL}}); err != nil {
+		return fmt.Errorf("gitx: lfs fetch %s: %w", src, err)
+	}
+	if _, err := r.run(ctx, spec{gitDir: dir, auth: []Remote{dst}, cfg: lfsPin(dst), args: []string{"lfs", "push", "--all", "--", dst.URL}}); err != nil {
+		return onDst(fmt.Errorf("gitx: lfs push %s: %w", dst, err))
+	}
+	return nil
+}
+
+// lfsPin returns the git config overrides for an LFS command talking to rem.
+func lfsPin(rem Remote) []string {
+	ep := lfsEndpoint(rem.URL)
+	return []string{
+		"lfs.url=" + ep,
+		"lfs.pushurl=" + ep,
+		"lfs.fetchinclude=",
+		"lfs.fetchexclude=",
+		"lfs.skipdownloaderrors=false",
+		"lfs.allowincompletepush=false",
+	}
+}
+
+// lfsEndpoint returns the LFS endpoint git-lfs derives for a remote URL:
+// file:// URLs are used as is; for http(s) a trailing "/" is dropped, ".git"
+// appended unless present, then "/info/lfs".
+func lfsEndpoint(raw string) string {
+	if strings.HasPrefix(strings.ToLower(raw), "file:") {
+		return raw
+	}
+	u := strings.TrimSuffix(raw, "/")
+	if !strings.HasSuffix(u, ".git") {
+		u += ".git"
+	}
+	return u + "/info/lfs"
 }
 
 // firstBranchRef returns refs/heads/<branch> when it must be pushed on its
@@ -264,8 +330,25 @@ func (c *Cache) emptySource(ctx context.Context, r *Runner, src, dst Remote, opt
 	return res, nil
 }
 
-// ensure makes dir a valid bare repository, re-creating it if corrupt.
+// cacheHEAD is where the cache's HEAD points: a ref that is never fetched,
+// so HEAD never resolves to mirrored content. git-lfs reads .lfsconfig from
+// the HEAD tree; a source branch named like the default HEAD target would
+// otherwise control git-lfs's endpoints.
+const cacheHEAD = "refs/gitmirror/none"
+
+// ensure makes dir a valid bare repository, re-creating it if corrupt, and
+// points its HEAD at cacheHEAD (also for caches created by older versions).
 func (c *Cache) ensure(ctx context.Context, r *Runner, dir string) error {
+	if err := c.ensureRepo(ctx, r, dir); err != nil {
+		return err
+	}
+	if _, err := r.run(ctx, spec{gitDir: dir, args: []string{"symbolic-ref", "HEAD", cacheHEAD}}); err != nil {
+		return fmt.Errorf("gitx: cache HEAD: %w", err)
+	}
+	return nil
+}
+
+func (c *Cache) ensureRepo(ctx context.Context, r *Runner, dir string) error {
 	fi, err := os.Stat(dir)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
@@ -289,7 +372,7 @@ func (c *Cache) ensure(ctx context.Context, r *Runner, dir string) error {
 }
 
 func initBare(ctx context.Context, r *Runner, dir string) error {
-	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dir), 0o700); err != nil {
 		return fmt.Errorf("gitx: cache: %w", err)
 	}
 	if _, err := r.run(ctx, spec{args: []string{"init", "--bare", "--quiet", "--", dir}}); err != nil {

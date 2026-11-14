@@ -12,7 +12,7 @@ import (
 
 func metricsText(t *testing.T, s *Server) string {
 	t.Helper()
-	rec := get(s.Handler(), "/metrics")
+	rec := get(s.MetricsHandler(), "/metrics")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("/metrics = %d", rec.Code)
 	}

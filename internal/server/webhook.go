@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"gitmirror/internal/forge"
 )
@@ -74,7 +77,7 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, forge.ErrBadSignature):
 		count(whUnauthorized)
-		log.Warn("server: webhook with bad signature", "remote", r.RemoteAddr)
+		s.logBadSignature(log, name, r.RemoteAddr)
 		text(w, http.StatusUnauthorized, "unauthorized")
 		return
 	case err != nil:
@@ -103,7 +106,8 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 // A repo found in a rule's last resolve gets a targeted webhook-lane sync
 // (no reconcile). Otherwise every owner rule for that owner and every
 // starred_by rule on the forge gets a full scheduled-lane sync, which picks
-// up new repositories.
+// up new repositories. A repo: rule naming the event's repo gets a targeted
+// webhook-lane sync even before any full sync has run.
 func (s *Server) route(forgeName string, ev *forge.Event) bool {
 	full := ev.Owner + "/" + ev.Name
 	type target struct{ rule, repo string }
@@ -130,10 +134,51 @@ func (s *Server) route(forgeName string, ev *forge.Event) bool {
 		if r.From.Forge != forgeName {
 			continue
 		}
+		if r.From.Repo != "" {
+			// A repo: rule has no listing to learn from: sync just that repo.
+			if strings.EqualFold(r.From.Repo, full) {
+				s.enqueueWebhook(r.Name, r.From.Repo)
+				queued = true
+			}
+			continue
+		}
 		if (r.From.Owner != "" && strings.EqualFold(r.From.Owner, ev.Owner)) || r.From.StarredBy != "" {
 			s.enqueueScheduled(r.Name)
 			queued = true
 		}
 	}
 	return queued
+}
+
+// badSigWindow is the minimum gap between "bad signature" log lines per forge.
+const badSigWindow = time.Minute
+
+type badSigLog struct {
+	mu         sync.Mutex
+	last       time.Time
+	logged     bool
+	suppressed int
+}
+
+// logBadSignature logs a rejected delivery at most once per badSigWindow per
+// forge (an unauthenticated sender must not be able to flood the log); the
+// next line reports how many were suppressed.
+func (s *Server) logBadSignature(log *slog.Logger, forgeLabel, remote string) {
+	v, _ := s.badSig.LoadOrStore(forgeLabel, &badSigLog{})
+	b := v.(*badSigLog)
+	now := s.Clock.Now()
+	b.mu.Lock()
+	if b.logged && now.Sub(b.last) < badSigWindow {
+		b.suppressed++
+		b.mu.Unlock()
+		return
+	}
+	n := b.suppressed
+	b.suppressed, b.last, b.logged = 0, now, true
+	b.mu.Unlock()
+	if n > 0 {
+		log.Warn("server: webhook with bad signature", "remote", remote, "suppressed", n)
+		return
+	}
+	log.Warn("server: webhook with bad signature", "remote", remote)
 }

@@ -122,6 +122,14 @@ type Defaults struct {
 	DeletionGrace string `yaml:"deletion_grace"`
 	// DeleteMissingReleases removes destination releases that no longer exist at the source.
 	DeleteMissingReleases bool `yaml:"delete_missing_releases"`
+	// MaxRefDeletions and MaxRefDeletionsPercent form the mass ref deletion
+	// guard: a sync that would delete more than MaxRefDeletions branches/tags
+	// AND more than MaxRefDeletionsPercent percent of the destination's
+	// branches/tags is aborted before anything is pushed (sync --allow-prune
+	// overrides it for one run). Defaults 5 and 50; after Parse both are
+	// non-nil. Count >= 0, percent 1..100.
+	MaxRefDeletions        *int `yaml:"max_ref_deletions"`
+	MaxRefDeletionsPercent *int `yaml:"max_ref_deletions_percent"`
 }
 
 // Git configures how gitmirror runs git and git-lfs.
@@ -144,6 +152,9 @@ type Server struct {
 	WebhookSecret string `yaml:"webhook_secret"`
 	// WebhookSecretFile is a path whose trimmed contents are the secret.
 	WebhookSecretFile string `yaml:"webhook_secret_file"`
+	// MetricsListen is where /metrics is served, on its own listener (never
+	// the main one). Default "127.0.0.1:9090"; "off" disables metrics.
+	MetricsListen string `yaml:"metrics_listen"`
 }
 
 // String implements fmt.Stringer without exposing the webhook secret.
@@ -185,6 +196,10 @@ type Rule struct {
 	DeletionGrace string `yaml:"deletion_grace"`
 	// DeleteMissingReleases overrides Defaults.DeleteMissingReleases when non-nil.
 	DeleteMissingReleases *bool `yaml:"delete_missing_releases"`
+	// MaxRefDeletions overrides Defaults.MaxRefDeletions when non-nil.
+	MaxRefDeletions *int `yaml:"max_ref_deletions"`
+	// MaxRefDeletionsPercent overrides Defaults.MaxRefDeletionsPercent when non-nil.
+	MaxRefDeletionsPercent *int `yaml:"max_ref_deletions_percent"`
 	// Adopt allows writing to a destination repo this tool did not create.
 	Adopt bool `yaml:"adopt"`
 }
@@ -245,7 +260,18 @@ type RuleSettings struct {
 	DeletionGrace         time.Duration // how long a source must stay not found before OnSourceDeleted applies
 	DeleteMissingReleases bool
 	Adopt                 bool
+	// MaxRefDeletions and MaxRefDeletionsPercent are the mass ref deletion
+	// guard (see Defaults). A zero MaxRefDeletionsPercent (a RuleSettings not
+	// built by Effective) means the defaults 5 and 50.
+	MaxRefDeletions        int
+	MaxRefDeletionsPercent int
 }
+
+// Defaults of the mass ref deletion guard.
+const (
+	DefaultMaxRefDeletions        = 5
+	DefaultMaxRefDeletionsPercent = 50
+)
 
 // Includes reports whether feature (e.g. "releases") is enabled.
 func (s RuleSettings) Includes(feature string) bool {
@@ -290,7 +316,16 @@ func (r Rule) Effective(d Defaults) RuleSettings {
 	if r.DeleteMissingReleases != nil {
 		s.DeleteMissingReleases = *r.DeleteMissingReleases
 	}
+	s.MaxRefDeletions = intOr(r.MaxRefDeletions, intOr(d.MaxRefDeletions, DefaultMaxRefDeletions))
+	s.MaxRefDeletionsPercent = intOr(r.MaxRefDeletionsPercent, intOr(d.MaxRefDeletionsPercent, DefaultMaxRefDeletionsPercent))
 	return s
+}
+
+func intOr(p *int, def int) int {
+	if p != nil {
+		return *p
+	}
+	return def
 }
 
 type plainConfig Config // no methods: avoids String recursion
@@ -415,6 +450,13 @@ func (c *Config) applyDefaults() {
 	if c.Server.Listen == "" {
 		c.Server.Listen = defaultListen
 	}
+	c.Server.MetricsListen = strings.TrimSpace(c.Server.MetricsListen)
+	switch {
+	case c.Server.MetricsListen == "":
+		c.Server.MetricsListen = "127.0.0.1:9090"
+	case strings.EqualFold(c.Server.MetricsListen, "off"):
+		c.Server.MetricsListen = "off"
+	}
 	for name, f := range c.Forges {
 		f.Type = strings.ToLower(strings.TrimSpace(f.Type))
 		f.URL = strings.TrimRight(strings.TrimSpace(f.URL), "/")
@@ -436,6 +478,14 @@ func (c *Config) applyDefaults() {
 	}
 	if d.DeletionGrace == "" {
 		d.DeletionGrace = defaultGrace
+	}
+	if d.MaxRefDeletions == nil {
+		n := DefaultMaxRefDeletions
+		d.MaxRefDeletions = &n
+	}
+	if d.MaxRefDeletionsPercent == nil {
+		n := DefaultMaxRefDeletionsPercent
+		d.MaxRefDeletionsPercent = &n
 	}
 	for i := range c.Rules {
 		r := &c.Rules[i]

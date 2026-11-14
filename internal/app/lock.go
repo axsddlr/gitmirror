@@ -39,10 +39,10 @@ type dirLock struct{ f *os.File }
 // when the lock is held; otherwise it retries every lockRetry until timeout
 // elapses or ctx is done.
 func acquireLock(ctx context.Context, dir string, timeout time.Duration) (*dirLock, error) {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("create state dir: %w", err)
 	}
-	f, err := os.OpenFile(filepath.Join(dir, lockFileName), os.O_RDWR|os.O_CREATE, 0o644)
+	f, err := os.OpenFile(filepath.Join(dir, lockFileName), os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open lock file: %w", err)
 	}

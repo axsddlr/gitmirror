@@ -171,6 +171,24 @@ func (a *App) Close() error {
 // Reconcile is skipped whenever repos is non-empty: a repo filter makes every
 // other pair look missing, and reconciling would start deletion clocks.
 func (a *App) Sync(ctx context.Context, rules, repos []string, dryRun bool, trigger string) (*SyncResult, error) {
+	return a.SyncWith(ctx, SyncRequest{Rules: rules, Repos: repos, DryRun: dryRun, Trigger: trigger})
+}
+
+// SyncRequest is the input of App.SyncWith.
+type SyncRequest struct {
+	// Rules and Repos optionally restrict the run (see Sync).
+	Rules, Repos []string
+	// DryRun computes the plan without writing anything.
+	DryRun bool
+	// Trigger records what started the run ("cli", "schedule", "webhook").
+	Trigger string
+	// AllowPrune bypasses the mass ref deletion guard for this run only.
+	AllowPrune bool
+}
+
+// SyncWith is Sync with every option, including AllowPrune.
+func (a *App) SyncWith(ctx context.Context, req SyncRequest) (*SyncResult, error) {
+	rules, repos := req.Rules, req.Repos
 	known := map[string]bool{}
 	settings := map[string]config.RuleSettings{}
 	for _, r := range a.Config.Rules {
@@ -214,7 +232,10 @@ func (a *App) Sync(ctx context.Context, rules, repos []string, dryRun bool, trig
 		pairs = kept
 	}
 
-	opt := engine.Options{DryRun: dryRun, Trigger: trigger}
+	opt := engine.Options{DryRun: req.DryRun, Trigger: req.Trigger, AllowPrune: req.AllowPrune}
+	if req.AllowPrune && a.Logger != nil {
+		a.Logger.Warn("mass ref deletion guard disabled for this run (--allow-prune)")
+	}
 	out := &SyncResult{Resolve: res}
 	out.Resolve.Pairs = pairs
 	out.Reports = a.Engine.Run(ctx, pairs, opt)

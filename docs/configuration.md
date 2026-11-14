@@ -51,6 +51,8 @@ All keys can be overridden per rule.
 | `on_source_deleted` | string | `keep` | `keep`, `archive`, `delete` | Action once a source has been gone for `deletion_grace`. `delete` only deletes destinations gitmirror created (adopted ones, and providers that cannot delete, are archived instead). |
 | `deletion_grace` | duration string | `24h` | Go duration, >= `1h` | The source must continuously report "not found" this long before `on_source_deleted` is applied. |
 | `delete_missing_releases` | bool | `false` | none | Delete destination releases (ones gitmirror created) that no longer exist at the source. |
+| `max_ref_deletions` | int | `5` | `>= 0` | Mass ref deletion guard, count part: a run is aborted (status `aborted`, nothing pushed) when it would delete more than this many destination branches/tags **and** more than `max_ref_deletions_percent` of them. `sync --allow-prune` bypasses the guard for one run. |
+| `max_ref_deletions_percent` | int | `50` | `1..100` | Mass ref deletion guard, percentage part (of the destination's branches and tags before the push). |
 
 ## `server`
 
@@ -79,6 +81,8 @@ All keys can be overridden per rule.
 | `on_source_deleted` | string | `defaults.on_source_deleted` | as above | Override. |
 | `deletion_grace` | duration string | `defaults.deletion_grace` | as above | Override. |
 | `delete_missing_releases` | bool | `defaults.delete_missing_releases` | none | Override (an explicit `false` overrides a `true` default). |
+| `max_ref_deletions` | int | `defaults.max_ref_deletions` | as above | Override (an explicit `0` overrides the default). |
+| `max_ref_deletions_percent` | int | `defaults.max_ref_deletions_percent` | as above | Override. |
 | `adopt` | bool | `false` | none (rule-level only; not in `defaults`) | Allow writing into destination repos that gitmirror did not create. Without it such a destination makes the pair fail. Adopted destinations are pruned like any mirror (refs missing at the source are removed) and are archived rather than deleted. |
 
 ### `rules[].from`

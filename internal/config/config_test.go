@@ -147,6 +147,9 @@ func TestDefaultsFilled(t *testing.T) {
 		Visibility:      "private",
 		OnSourceDeleted: "keep",
 		DeletionGrace:   24 * time.Hour,
+
+		MaxRefDeletions:        5,
+		MaxRefDeletionsPercent: 50,
 	}
 	if c.Defaults.DeletionGrace != "24h" {
 		t.Errorf("defaults deletion_grace = %q, want 24h", c.Defaults.DeletionGrace)

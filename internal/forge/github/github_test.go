@@ -234,6 +234,53 @@ func TestLoginCachedOnceButNotFailures(t *testing.T) {
 	}
 }
 
+func TestLoginDoesNotHoldLockDuringRequest(t *testing.T) {
+	f := newFakeAPI(t)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var relOnce sync.Once
+	defer relOnce.Do(func() { close(release) })
+	var once sync.Once
+	f.handle("GET /user", func(w http.ResponseWriter, r *http.Request) {
+		once.Do(func() { close(started) })
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+		writeJSON(w, 200, map[string]string{"login": "me"})
+	})
+	p := f.provider()
+	first := make(chan error, 1)
+	go func() {
+		_, err := p.login(context.Background())
+		first <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first login never reached the server")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	second := make(chan error, 1)
+	go func() {
+		_, err := p.login(ctx)
+		second <- err
+	}()
+	select {
+	case err := <-second:
+		if err == nil {
+			t.Fatal("cancelled login should fail")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("second login blocked behind the first caller's request")
+	}
+	relOnce.Do(func() { close(release) })
+	if err := <-first; err != nil {
+		t.Fatal(err)
+	}
+}
+
 // ---------------------------------------------------------------- GetRepo
 
 func TestGetRepoMapping(t *testing.T) {

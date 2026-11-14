@@ -182,10 +182,13 @@ func (p *Provider) Login(ctx context.Context) (string, error) { return p.login(c
 // are not cached.
 func (p *Provider) login(ctx context.Context) (string, error) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.who != "" {
-		return p.who, nil
+	who := p.who
+	p.mu.Unlock()
+	if who != "" {
+		return who, nil
 	}
+	// Fetch outside the lock so a caller with a short deadline is not stuck
+	// behind another caller's in-flight request.
 	u, _, err := p.client.Users.Get(ctx, "")
 	if err != nil {
 		return "", p.wrap("get authenticated user", err)
@@ -193,8 +196,11 @@ func (p *Provider) login(ctx context.Context) (string, error) {
 	if u.GetLogin() == "" {
 		return "", errors.New("github: get authenticated user: empty login in response")
 	}
-	p.who = u.GetLogin()
-	return p.who, nil
+	who = u.GetLogin()
+	p.mu.Lock()
+	p.who = who
+	p.mu.Unlock()
+	return who, nil
 }
 
 // ---------------------------------------------------------------- repos

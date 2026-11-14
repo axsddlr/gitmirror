@@ -42,7 +42,7 @@ func TestWebhookMethodNotAllowed(t *testing.T) {
 	if rec := get(h, "/webhook/src"); rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("GET /webhook/src = %d", rec.Code)
 	}
-	for _, p := range []string{"/healthz", "/readyz", "/metrics"} {
+	for _, p := range []string{"/healthz", "/readyz"} {
 		if rec := do(h, http.MethodPost, p, nil, nil); rec.Code != http.StatusMethodNotAllowed {
 			t.Fatalf("POST %s = %d", p, rec.Code)
 		}

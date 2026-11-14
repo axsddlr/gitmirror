@@ -19,7 +19,7 @@ independent rules in opposite directions on different repositories.
 | `internal/forge/github`, `internal/forge/gitea` | Providers. `gitea` also serves Forgejo. |
 | `internal/forge/httpx` | HTTP transport with retries and rate-limit waits that never repeats a non-idempotent write. |
 | `internal/forge/fake` | In-memory provider used in tests. |
-| `internal/server` | `serve` daemon: per-rule scheduler, two job lanes (scheduled, webhook) with coalescing, webhook receiver, `/healthz`, `/readyz`, `/metrics`, graceful shutdown. |
+| `internal/server` | `serve` daemon: per-rule scheduler, two job lanes (scheduled, webhook) with coalescing, webhook receiver, `/healthz`, `/readyz`, `/metrics` (separate `server.metrics_listen` listener), graceful shutdown. |
 | `internal/integration` | Build-tag `integration` tests against a real Gitea in Docker. |
 
 ## Commands and the state-dir lock
@@ -59,9 +59,19 @@ A run ends `ok`, `partial` (a non-fatal step failed), `failed` or `aborted`.
    (force-updates and deletions are propagated: the push prunes). LFS objects are fetched and
    pushed **before** the ref push, so a failed LFS transfer is retried on the next run instead of
    leaving refs that point at missing objects. If `git-lfs` is not installed, the lfs step is
-   recorded as skipped and git is mirrored without it.
+   recorded as skipped and git is mirrored without it. The state store records the source ref
+   digest for which LFS last completed (`pairs.lfs_digest`); while it differs from the current
+   source digest the LFS transfer runs even when no ref changed, so refs pushed without LFS
+   objects (git-lfs missing, `lfs` added to `include` later) heal. Every LFS command pins
+   `lfs.url` / `lfs.pushurl` to the endpoint of the remote it talks to and resets the other
+   `.lfsconfig`-settable keys, and the cache's `HEAD` points at `refs/gitmirror/none`, so a
+   `.lfsconfig` in mirrored content cannot redirect LFS traffic.
    * **Empty-source guard**: if the source suddenly has no branches or tags but previously had some,
      the run is `aborted` and nothing is pruned. A source that was always empty is allowed.
+   * **Mass ref deletion guard**: the ref diff is computed before anything is transferred; if the
+     push would delete more than `max_ref_deletions` refs **and** more than
+     `max_ref_deletions_percent` percent of the destination's refs, the run is `aborted` (also in
+     a dry run). `sync --allow-prune` bypasses it for that run (warning logged, noted in the git step detail).
    * Rejected refs (for example protected branches or hooks) are reported with the ref names.
 3. **settings**: description, homepage, topics, default branch (only when that branch exists in the
    source refs), visibility (never widened beyond the wanted value). Archiving is deferred to finalize.
@@ -84,6 +94,10 @@ and print the actions that would be taken.
 |---|---|
 | Never write to a destination gitmirror did not create unless `adopt: true` | `engine.prepare`, `state.Owned` |
 | Empty-source guard before pruning | `engine.syncGit`, `gitx.ErrEmptySource` |
+| Mass ref deletion guard (`max_ref_deletions` / `max_ref_deletions_percent`, bypass `sync --allow-prune`) | `engine.massDeletion`, `gitx.SyncOptions.CheckDeletions` |
+| LFS objects heal when refs were pushed without them | `engine.syncGit`, `gitx.SyncOptions.LFSDigest`, `state.SetLFSDigest` |
+| git never follows HTTP redirects (`http.followRedirects=false`), so the origin-scoped auth header cannot reach another host; LFS endpoints are pinned so `.lfsconfig` in mirrored content is ignored | `gitx/runner.go`, `gitx.lfsTransfer` |
+| State dir, cache dirs `0700`, lock file `0600`; schema migrations run under `BEGIN IMMEDIATE` so concurrent opens apply each migration once | `state.Open`, `gitx` cache, `app/lock.go` |
 | `deletion_grace` before applying `on_source_deleted` (only a positive "not found" counts; any other error leaves the pair alone; the clock restarts when the source reappears) | `engine/reconcile.go`, `state.MarkMissing` |
 | After the grace, a no-op outcome (destination not owned or already gone) is recorded as a run once per missing period, not every cycle | `engine/reconcile.go`, `state.SetMissingReported` |
 | Durable audit record of every destination create, adopt, archive and delete (real runs only); `DeletePair` does not remove it; shown by `status --audit N` | `engine/audit.go`, `state.Audit` / `state.AuditLog` |

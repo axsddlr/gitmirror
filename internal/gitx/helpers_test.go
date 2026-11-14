@@ -271,6 +271,26 @@ func secretForms(user, token string) []string {
 // per-repo "user:token" in creds.
 func startGitHTTP(t *testing.T, root string, creds map[string]string) string {
 	t.Helper()
+	h := gitBackend(t, root)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		repo, _, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/"), "/")
+		want, ok := creds[repo]
+		got := r.Header.Values("Authorization")
+		if !ok || len(got) != 1 || got[0] != "Basic "+base64.StdEncoding.EncodeToString([]byte(want)) {
+			w.Header().Set("WWW-Authenticate", `Basic realm="test"`)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		h.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
+// gitBackend returns a handler serving the bare repos under root over smart
+// HTTP via git-http-backend, without any authentication.
+func gitBackend(t *testing.T, root string) http.Handler {
+	t.Helper()
 	execPath := tgit(t, nil, root, "--exec-path")
 	backend := filepath.Join(filepath.FromSlash(execPath), "git-http-backend")
 	if _, err := os.Stat(backend + ".exe"); err == nil {
@@ -291,19 +311,7 @@ func startGitHTTP(t *testing.T, root string, creds map[string]string) string {
 			"HOME=" + home,
 		},
 	}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		repo, _, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/"), "/")
-		want, ok := creds[repo]
-		got := r.Header.Values("Authorization")
-		if !ok || len(got) != 1 || got[0] != "Basic "+base64.StdEncoding.EncodeToString([]byte(want)) {
-			w.Header().Set("WWW-Authenticate", `Basic realm="test"`)
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		h.ServeHTTP(w, r)
-	}))
-	t.Cleanup(srv.Close)
-	return srv.URL
+	return h
 }
 
 // assertNoSecretsOnDisk walks dirs and fails if any file contains a secret.

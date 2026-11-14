@@ -78,6 +78,7 @@ type Server struct {
 	// (before signature verification); further requests get 503 with
 	// Retry-After: 1. 0 means 8.
 	MaxConcurrentWebhooks int
+	MetricsListener       net.Listener
 
 	// onJobDone, when set (tests), is called after every job.
 	onJobDone func(lane string, j Job)
@@ -88,6 +89,7 @@ type Server struct {
 	rng     *rand.Rand // scheduler goroutine only
 	stop    chan struct{}
 	whSem   chan struct{}
+	badSig  sync.Map // forge -> *badSigLog
 
 	ready    atomic.Bool
 	stopping atomic.Bool
@@ -153,7 +155,6 @@ func (s *Server) init() {
 			}
 			text(w, http.StatusServiceUnavailable, "not ready")
 		})
-		mux.Handle("GET /metrics", promhttp.HandlerFor(s.m.reg, promhttp.HandlerOpts{}))
 		mux.HandleFunc("POST /webhook/{forge}", s.handleWebhook)
 		s.handler = mux
 	})
@@ -173,11 +174,20 @@ func text(w http.ResponseWriter, code int, msg string) {
 	fmt.Fprintln(w, msg)
 }
 
-// Handler returns the HTTP routes: GET /healthz, GET /readyz, GET /metrics
-// and POST /webhook/{forge}. Other methods on these paths get 405.
+// Handler returns the main HTTP routes: GET /healthz, GET /readyz and
+// POST /webhook/{forge}. /metrics is not served here (see MetricsListener). Other methods on these paths get 405.
 func (s *Server) Handler() http.Handler {
 	s.init()
 	return s.handler
+}
+
+// MetricsHandler returns the handler for GET /metrics, which Run serves only
+// on MetricsListener.
+func (s *Server) MetricsHandler() http.Handler {
+	s.init()
+	mux := http.NewServeMux()
+	mux.Handle("GET /metrics", promhttp.HandlerFor(s.m.reg, promhttp.HandlerOpts{}))
+	return mux
 }
 
 // Addr returns the listen address once Run has started, else nil.
@@ -208,6 +218,21 @@ func (s *Server) Run(ctx context.Context, ln net.Listener) error {
 	}
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- hs.Serve(ln) }()
+	var ms *http.Server
+	metricsErr := make(chan error, 1)
+	if s.MetricsListener != nil {
+		ms = &http.Server{
+			Handler:           s.MetricsHandler(),
+			ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout:       60 * time.Second,
+			WriteTimeout:      60 * time.Second,
+			IdleTimeout:       120 * time.Second,
+			MaxHeaderBytes:    1 << 20,
+			ErrorLog:          slog.NewLogLogger(s.log().Handler(), slog.LevelWarn),
+		}
+		go func() { metricsErr <- ms.Serve(s.MetricsListener) }()
+		s.log().Info("server: metrics listening", "addr", s.MetricsListener.Addr().String())
+	}
 
 	// Jobs outlive ctx: they are cancelled only after ShutdownTimeout.
 	jobCtx, cancelJobs := context.WithCancel(context.WithoutCancel(ctx))
@@ -227,6 +252,9 @@ func (s *Server) Run(ctx context.Context, ln net.Listener) error {
 	case err := <-serveErr:
 		runErr = fmt.Errorf("server: %w", err)
 		serveErr <- nil
+	case err := <-metricsErr:
+		runErr = fmt.Errorf("server: metrics: %w", err)
+		metricsErr <- nil
 	}
 
 	s.log().Info("server: shutting down")
@@ -239,6 +267,15 @@ func (s *Server) Run(ctx context.Context, ln net.Listener) error {
 	if err := hs.Shutdown(shCtx); err != nil {
 		s.log().Warn("server: http shutdown", "err", err)
 		hs.Close()
+	}
+	if ms != nil {
+		if err := ms.Shutdown(shCtx); err != nil {
+			s.log().Warn("server: metrics shutdown", "err", err)
+			ms.Close()
+		}
+		if err := <-metricsErr; err != nil && !errors.Is(err, http.ErrServerClosed) && runErr == nil {
+			runErr = fmt.Errorf("server: metrics: %w", err)
+		}
 	}
 	cancel()
 	if err := <-serveErr; err != nil && !errors.Is(err, http.ErrServerClosed) && runErr == nil {
