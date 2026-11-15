@@ -119,6 +119,23 @@ func TestMissingDefaultConfigUsesDefaults(t *testing.T) {
 	}
 }
 
+// TestDefaultConfigReadFromWorkingDir pins what the Docker image relies on:
+// it does not set GITMIRROR_CONFIG but runs in /config, so a mounted
+// /config/config.yaml is read (and an absent one means built-in defaults).
+func TestDefaultConfigReadFromWorkingDir(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	t.Setenv("GITMIRROR_STATE_DIR", t.TempDir())
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte("not_a_key: 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errOut := runCLI([]string{"validate", "--offline"}, nil)
+	wantCode(t, code, 2, out, errOut)
+	if !strings.Contains(errOut+out, "not_a_key") {
+		t.Fatalf("config.yaml in the working directory was not read: stdout = %q, stderr = %q", out, errOut)
+	}
+}
+
 func TestExplicitMissingConfigStillErrors(t *testing.T) {
 	t.Chdir(t.TempDir())
 	missing := filepath.Join(t.TempDir(), "nope.yaml")

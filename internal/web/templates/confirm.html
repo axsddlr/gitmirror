@@ -6,11 +6,11 @@
   {{- if .Data.Items}}<ul>{{range .Data.Items}}<li>{{.}}</li>{{end}}</ul>{{end}}
   <div class="actions">
   {{- if .Data.Action}}
+    <a class="btn" href="{{.Data.Back}}">Cancel</a>
     <form method="post" action="{{.Data.Action}}">
       {{template "csrf" .}}
       <button class="btn btn-danger" type="submit">{{.Data.Button}}</button>
     </form>
-    <a class="btn" href="{{.Data.Back}}">Cancel</a>
   {{- else}}
     <a class="btn" href="{{.Data.Back}}">Back</a>
   {{- end}}

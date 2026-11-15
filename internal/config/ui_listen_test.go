@@ -44,6 +44,48 @@ func TestUIListen(t *testing.T) {
 	}
 }
 
+func TestUIListenEnvPrecedence(t *testing.T) {
+	const key = "GITMIRROR_UI_LISTEN"
+	tests := []struct {
+		name, top string
+		env       map[string]string
+		want      string
+	}{
+		{"default", "", nil, "127.0.0.1:8090"},
+		{"config", "server: {ui_listen: '127.0.0.1:8095'}", nil, "127.0.0.1:8095"},
+		{"env over default", "", map[string]string{key: ":8090"}, ":8090"},
+		{"env over config", "server: {ui_listen: '127.0.0.1:8095'}", map[string]string{key: ":8096"}, ":8096"},
+		{"env off", "", map[string]string{key: " OFF "}, "off"},
+		{"empty env ignored", "server: {ui_listen: '127.0.0.1:8095'}", map[string]string{key: ""}, "127.0.0.1:8095"},
+		{"empty env default", "", map[string]string{key: ""}, "127.0.0.1:8090"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := mustParse(t, doc(tt.top, okRule), tt.env, nil)
+			if c.Server.UIListen != tt.want {
+				t.Fatalf("UIListen = %q, want %q", c.Server.UIListen, tt.want)
+			}
+		})
+	}
+	// The env value is validated like the file value.
+	_, err := parse(t, doc("", okRule), map[string]string{key: "nonsense"}, nil)
+	if err == nil || !strings.Contains(err.Error(), "server.ui_listen") {
+		t.Errorf("bad env value: err = %v", err)
+	}
+}
+
+// TestUIListenEnvWithoutConfigFile covers the no-config-file path (Parse of
+// an empty document), which the Docker image relies on.
+func TestUIListenEnvWithoutConfigFile(t *testing.T) {
+	c, err := Parse(nil, envFrom(map[string]string{"GITMIRROR_UI_LISTEN": ":8090"}), filesFrom(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Server.UIListen != ":8090" {
+		t.Fatalf("UIListen = %q", c.Server.UIListen)
+	}
+}
+
 func TestExternalURL(t *testing.T) {
 	if c := mustParse(t, doc("", okRule), nil, nil); c.Server.ExternalURL != "" {
 		t.Errorf("default = %q", c.Server.ExternalURL)

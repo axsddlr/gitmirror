@@ -403,6 +403,11 @@ func Parse(data []byte, env func(string) (string, bool), readFile func(string) (
 	if v, ok := env(stateDirEnv); ok && v != "" {
 		c.StateDir = v
 	}
+	// GITMIRROR_UI_LISTEN likewise overrides server.ui_listen (a container
+	// sets it to ":8090" so the UI is reachable through a published port).
+	if v, ok := env(uiListenEnv); ok && v != "" {
+		c.Server.UIListen = v
+	}
 	c.applyDefaults()
 	errs := c.resolveSecrets(readFile)
 	if err := c.Validate(); err != nil {
@@ -416,6 +421,9 @@ func Parse(data []byte, env func(string) (string, bool), readFile func(string) (
 
 // stateDirEnv is the environment variable that overrides state_dir.
 const stateDirEnv = "GITMIRROR_STATE_DIR"
+
+// uiListenEnv is the environment variable that overrides server.ui_listen.
+const uiListenEnv = "GITMIRROR_UI_LISTEN"
 
 var varRef = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)`)
 

@@ -1,10 +1,24 @@
 # gitmirror with Docker Compose.
 #
+#   docker compose up -d
+#   docker compose logs gitmirror      # shows the one-time web UI setup code
+#
+# Then open http://localhost:8090, enter the setup code, choose a password and
+# add your sites and mirrors in the browser. No config file is needed. Everything
+# you set up is kept in the gitmirror-data volume (back it up; it holds
+# secret.key, which unlocks the saved tokens).
+#
+# The web UI is published on 127.0.0.1 of the host only. To use it from other
+# machines, put an HTTPS reverse proxy (Caddy, nginx, Traefik) in front of port
+# 8090 instead of publishing it on all interfaces, and set the "Public address"
+# on the Webhooks page (or server.external_url) to the proxy's https:// URL.
+#
+# Advanced: configure with a file. Uncomment the config.yaml mount and, if you
+# keep tokens in files, the secrets below:
 #   mkdir -p secrets && printf '%s' "<github token>" > secrets/github_token
 #   printf '%s' "<gitea token>"   > secrets/gitea_token
 #   printf '%s' "<webhook secret>" > secrets/webhook_secret
 #   cp ../config.example.yaml config.yaml    # edit: token_file entries (see below)
-#   docker compose up -d
 #
 # In config.yaml refer to the secrets by path instead of embedding tokens:
 #   forges:
@@ -24,18 +38,23 @@ services:
     restart: unless-stopped
     command: ["serve"]
     environment:
-      GITMIRROR_STATE_DIR: /data   # also set in the image; overrides state_dir in config.yaml
+      GITMIRROR_STATE_DIR: /data     # also set in the image; overrides state_dir in config.yaml
+      GITMIRROR_UI_LISTEN: ":8090"   # also set in the image; overrides server.ui_listen
     ports:
-      - "8080:8080"          # webhooks, /healthz, /readyz. Put a TLS reverse proxy in front.
+      - "8080:8080"             # webhooks, /healthz, /readyz. Put a TLS reverse proxy in front.
+      - "127.0.0.1:8090:8090"   # web UI, reachable only from this machine (see above)
       # Do NOT publish 9090: /metrics is unauthenticated. Set `server.metrics_listen: ":9090"`
       # in config.yaml and scrape it from another container on the same Docker network.
     volumes:
-      - ./config.yaml:/config/config.yaml:ro
       - gitmirror-data:/data
-    secrets:
-      - github_token
-      - gitea_token
-      - webhook_secret
+      # Advanced: an optional config file. The image reads /config/config.yaml when
+      # it exists and uses built-in defaults when it does not.
+      # - ./config.yaml:/config/config.yaml:ro
+    # Advanced: token and webhook secret files for config.yaml (see the top of this file).
+    # secrets:
+    #   - github_token
+    #   - gitea_token
+    #   - webhook_secret
     # serve lets running syncs finish for up to 10 minutes after SIGTERM; give it more
     # than Docker's default 10 s stop timeout so a restart does not abort a sync.
     stop_grace_period: 11m
@@ -47,7 +66,7 @@ services:
       start_period: 10s
 
   # Optional: a throw-away Gitea to try gitmirror against (uncomment, then create a
-  # user + token at http://localhost:3000 and point a `gitea` forge at http://gitea:3000).
+  # user + token at http://localhost:3000 and add it as a Gitea site at http://gitea:3000).
   # gitea:
   #   image: gitea/gitea:1.24
   #   restart: unless-stopped
@@ -60,13 +79,14 @@ services:
   #   volumes:
   #     - gitea-data:/data
 
-secrets:
-  github_token:
-    file: ./secrets/github_token
-  gitea_token:
-    file: ./secrets/gitea_token
-  webhook_secret:
-    file: ./secrets/webhook_secret
+# Advanced: uncomment together with the service's secrets list.
+# secrets:
+#   github_token:
+#     file: ./secrets/github_token
+#   gitea_token:
+#     file: ./secrets/gitea_token
+#   webhook_secret:
+#     file: ./secrets/webhook_secret
 
 volumes:
   gitmirror-data:
