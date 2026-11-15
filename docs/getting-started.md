@@ -75,7 +75,7 @@ Running it permanently is covered in [step 10](#10-keep-it-running).
 
 gitmirror talks to each forge with a token. The **source** token only needs to read; the
 **destination** token creates repositories and pushes to them. Full permission tables are in the
-README under [Token permissions](../README.md#token-permissions).
+reference under [Token permissions](reference.md#token-permissions).
 
 ### GitHub (source in this guide)
 
@@ -88,7 +88,7 @@ README under [Token permissions](../README.md#token-permissions).
 4. Copy the token now; GitHub shows it only once.
 
 Classic tokens are the safe choice. Fine-grained tokens work for reading but are limited to one
-account or organisation; see the README if you prefer them.
+account or organisation; see [Token permissions](reference.md#token-permissions) if you prefer them.
 
 ### Gitea / Forgejo (destination in this guide)
 
@@ -310,7 +310,7 @@ How to read the result:
 | `ok` | Everything that applies was mirrored. |
 | `partial` | Some steps worked but one (for example releases or the wiki) failed. Retried next run. |
 | `failed` | The pair could not be mirrored (for example the destination could not be created or the push was rejected). The error is on the line. |
-| `aborted` | A safety guard stopped the run before anything was changed (see the README's Troubleshooting). |
+| `aborted` | A safety guard stopped the run before anything was changed (see [Troubleshooting](reference.md#troubleshooting)). |
 
 Step values: `ok` (changed something), `unchanged`, `skipped` (not applicable, e.g. the source has
 no wiki or LFS), `failed`.
@@ -481,7 +481,7 @@ fail with a "not allowed" error in Gitea.
 * **Changing the config**: run `gitmirror validate` and `gitmirror plan`, then restart `serve`
   (it reads the config at startup).
 * **When a run fails**: `gitmirror status` shows the last error per pair; the
-  [Troubleshooting](../README.md#troubleshooting) section of the README explains each message. A
+  [Troubleshooting](reference.md#troubleshooting) section of the reference explains each message. A
   failed or partial pair is retried on the next run; you do not need to clean anything up.
 * **If the safety guard trips** ("sync would delete N of M destination refs"): check the source. If
   the deletions are real, run `gitmirror sync --allow-prune --repo OWNER/NAME` once.
@@ -496,7 +496,7 @@ fail with a "not allowed" error in Gitea.
   database is migrated automatically on start.
 * **Monitoring**: alert on `gitmirror_pair_consecutive_failures > 2`, or on
   `time() - gitmirror_pair_last_success_timestamp_seconds` exceeding three intervals. All metrics are
-  listed in the README.
+  listed in the [reference](reference.md#endpoints-and-metrics).
 
 ---
 
