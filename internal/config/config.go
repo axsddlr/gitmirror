@@ -43,6 +43,7 @@ const (
 	defaultStateDir    = "./data"
 	defaultConcurrency = 4
 	defaultListen      = ":8080"
+	defaultUIListen    = "127.0.0.1:8090"
 	defaultInterval    = "1h"
 	minInterval        = time.Minute
 	defaultGrace       = "24h"
@@ -161,6 +162,14 @@ type Server struct {
 	// MetricsListen is where /metrics is served, on its own listener (never
 	// the main one). Default "127.0.0.1:9090"; "off" disables metrics.
 	MetricsListen string `yaml:"metrics_listen"`
+	// UIListen is where the web UI is served, on its own listener. Default
+	// "127.0.0.1:8090"; "off" disables the web UI.
+	UIListen string `yaml:"ui_listen"`
+	// ExternalURL is the public base URL of gitmirror (for example
+	// "https://mirror.example.com"), without a trailing slash; empty means
+	// unknown. The web UI uses it for webhook URLs and marks its cookies
+	// Secure when it is https.
+	ExternalURL string `yaml:"external_url"`
 }
 
 // String implements fmt.Stringer without exposing the webhook secret.
@@ -469,6 +478,14 @@ func (c *Config) applyDefaults() {
 	case strings.EqualFold(c.Server.MetricsListen, "off"):
 		c.Server.MetricsListen = "off"
 	}
+	c.Server.UIListen = strings.TrimSpace(c.Server.UIListen)
+	switch {
+	case c.Server.UIListen == "":
+		c.Server.UIListen = defaultUIListen
+	case strings.EqualFold(c.Server.UIListen, "off"):
+		c.Server.UIListen = "off"
+	}
+	c.Server.ExternalURL = strings.TrimRight(strings.TrimSpace(c.Server.ExternalURL), "/")
 	for name, f := range c.Forges {
 		c.Forges[name] = normaliseForge(f)
 	}

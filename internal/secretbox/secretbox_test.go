@@ -21,7 +21,9 @@ func TestSealOpenRoundTrip(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if msg != "" && bytes.Contains(ct, []byte(msg)) {
+		// Short messages can appear in random bytes by chance; only check
+		// ones long enough for that to be practically impossible.
+		if len(msg) >= 8 && bytes.Contains(ct, []byte(msg)) {
 			t.Fatalf("ciphertext contains the plaintext")
 		}
 		if ct[0] != version {

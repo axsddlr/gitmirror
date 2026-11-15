@@ -61,6 +61,8 @@ All keys can be overridden per rule.
 | `listen` | string | `:8080` | none (bind errors surface at start) | Listen address of `serve`. |
 | `webhook_secret` | string | none | Mutually exclusive with `webhook_secret_file` | Shared secret used to verify webhook signatures. If neither is set, `POST /webhook/<forge>` answers 404 and a warning is logged at start. |
 | `webhook_secret_file` | string | none | File must exist and be non-empty after trimming | File holding the secret. |
+| `ui_listen` | string | `127.0.0.1:8090` | `host:port` or `off`; must not use the same address as `listen` or `metrics_listen` (port `0` is exempt) | Listen address of the web UI, on its own listener. `off` disables the web UI. On first start (no admin password yet) `serve` logs a one-time setup code at WARN: open `<url>/setup` and enter it to choose the admin password. Keep it on `127.0.0.1` unless it is behind HTTPS. |
+| `external_url` | string | none | Absolute `http`/`https` URL with a host; no user info, query or fragment. Trailing `/` trimmed. | The address people and forges use to reach gitmirror, e.g. `https://mirror.example.com`. Used for webhook URLs shown in the web UI and in the setup message; when it is `https`, web UI cookies are marked `Secure`. |
 
 ## `git`
 

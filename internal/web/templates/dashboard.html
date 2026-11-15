@@ -1,0 +1,16 @@
+{{define "content"}}
+<h1>Dashboard</h1>
+{{if eq .Data 0}}
+<section class="card empty">
+  <h2>No mirrors yet</h2>
+  <p>No mirrors yet. Start by adding your sites: the places where your code lives, such as GitHub or your own Gitea server. Then you can choose what to copy.</p>
+  <p><a class="btn btn-primary" href="/sites">Add your sites</a></p>
+</section>
+{{else}}
+<section class="card">
+  <h2>Mirrors are running</h2>
+  <p>{{.Data}} mirror{{if ne .Data 1}}s are{{else}} is{{end}} set up. A full overview of what was copied and when is coming soon.</p>
+  <p><a class="btn" href="/mirrors">See mirrors</a></p>
+</section>
+{{end}}
+{{end}}

@@ -1,0 +1,218 @@
+/* gitmirror web UI. Plain CSS, no framework. Colours are CSS variables so
+   light and dark mode follow the system setting. */
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --text: #1c2330;
+  --muted: #5a6474;
+  --border: #d5dae1;
+  --primary: #1f5fbf;
+  --primary-text: #ffffff;
+  --primary-hover: #184c99;
+  --focus: #f0a400;
+  --ok-bg: #e5f4ea;
+  --ok-text: #14532d;
+  --info-bg: #e7effb;
+  --info-text: #183a6b;
+  --err-bg: #fdeaea;
+  --err-text: #8a1c1c;
+  --radius: 10px;
+  --space: 1rem;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #12161c;
+    --surface: #1b2129;
+    --text: #e6e9ee;
+    --muted: #a3acba;
+    --border: #343d4a;
+    --primary: #5b9cf5;
+    --primary-text: #0b1220;
+    --primary-hover: #82b4f8;
+    --focus: #ffc94d;
+    --ok-bg: #173323;
+    --ok-text: #b6e8c7;
+    --info-bg: #1a2a44;
+    --info-text: #c5d9fa;
+    --err-bg: #3d1a1a;
+    --err-text: #f7c3c3;
+  }
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+  font-size: 1rem;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+h1, h2 { line-height: 1.25; margin: 0 0 calc(var(--space) * 0.75); }
+h1 { font-size: 1.75rem; }
+h2 { font-size: 1.25rem; }
+p { margin: 0 0 var(--space); }
+a { color: var(--primary); }
+a:hover { color: var(--primary-hover); }
+
+:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.wrap {
+  width: 100%;
+  max-width: 64rem;
+  margin: 0 auto;
+  padding: 0 var(--space);
+}
+.narrow { max-width: 32rem; }
+.muted { color: var(--muted); }
+.lead { font-size: 1.1rem; color: var(--muted); }
+
+.skip {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+}
+.skip:focus {
+  left: var(--space);
+  top: var(--space);
+  z-index: 10;
+  background: var(--surface);
+  padding: 0.5rem 1rem;
+  border-radius: var(--radius);
+}
+
+/* Header and navigation */
+.top {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: calc(var(--space) * 2);
+}
+.top-inner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem var(--space);
+  padding-top: 0.75rem;
+  padding-bottom: 0.75rem;
+}
+.brand {
+  font-weight: 700;
+  font-size: 1.25rem;
+  color: var(--text);
+  text-decoration: none;
+  margin-right: auto;
+}
+.nav { order: 3; width: 100%; }
+.nav ul {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+}
+.nav a {
+  display: inline-block;
+  padding: 0.4rem 0.75rem;
+  border-radius: var(--radius);
+  color: var(--text);
+  text-decoration: none;
+}
+.nav a:hover { background: var(--bg); }
+.nav a[aria-current="page"] {
+  background: var(--primary);
+  color: var(--primary-text);
+}
+.signout {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0;
+}
+.who { color: var(--muted); font-size: 0.9rem; }
+@media (min-width: 52rem) {
+  .brand { margin-right: var(--space); }
+  .nav { order: 0; width: auto; margin-right: auto; }
+}
+
+/* Content */
+main { padding-bottom: calc(var(--space) * 2); }
+main:focus { outline: none; }
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: calc(var(--space) * 1.5);
+  margin-bottom: calc(var(--space) * 1.5);
+}
+.card > :last-child { margin-bottom: 0; }
+.empty { text-align: center; padding: calc(var(--space) * 2.5) calc(var(--space) * 1.5); }
+.empty p { max-width: 36rem; margin-left: auto; margin-right: auto; }
+.foot {
+  color: var(--muted);
+  font-size: 0.875rem;
+  padding-bottom: calc(var(--space) * 2);
+}
+
+/* Messages */
+.flash, .form-error {
+  border-radius: var(--radius);
+  padding: 0.75rem 1rem;
+  margin-bottom: var(--space);
+  border: 1px solid transparent;
+}
+.flash-success { background: var(--ok-bg); color: var(--ok-text); }
+.flash-info { background: var(--info-bg); color: var(--info-text); }
+.flash-error, .form-error { background: var(--err-bg); color: var(--err-text); }
+.form-error p { margin: 0; }
+
+/* Forms */
+.field { margin-bottom: calc(var(--space) * 1.25); }
+label { display: block; font-weight: 600; margin-bottom: 0.25rem; }
+.hint { color: var(--muted); font-size: 0.9rem; margin: 0 0 0.4rem; }
+.error { color: var(--err-text); font-weight: 600; font-size: 0.95rem; margin: 0 0 0.4rem; }
+input[type="text"], input[type="password"], input[type="url"], input[type="email"], input[type="number"], select, textarea {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.6rem 0.75rem;
+  min-height: 2.75rem;
+}
+.has-error input { border-color: var(--err-text); border-width: 2px; }
+
+/* Buttons */
+.btn {
+  display: inline-block;
+  font: inherit;
+  font-weight: 600;
+  line-height: 1.2;
+  text-decoration: none;
+  text-align: center;
+  cursor: pointer;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  padding: 0.65rem 1.1rem;
+  min-height: 2.75rem;
+}
+.btn:hover { background: var(--bg); color: var(--text); }
+.btn-primary {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--primary-text);
+}
+.btn-primary:hover { background: var(--primary-hover); border-color: var(--primary-hover); color: var(--primary-text); }
+.btn-quiet { padding: 0.4rem 0.8rem; min-height: 2.25rem; }

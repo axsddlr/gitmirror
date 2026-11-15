@@ -46,6 +46,7 @@ func (c *Config) Validate() error {
 			add("server.metrics_listen: %q is not a host:port address or \"off\"", ml)
 		}
 	}
+	c.validateUIServer(add)
 
 	names := make([]string, 0, len(c.Forges))
 	for n := range c.Forges {
@@ -344,4 +345,53 @@ func (d Dest) Render(srcOwner, srcName string) (owner, name string, err error) {
 		return "", "", fmt.Errorf("name: %w", err)
 	}
 	return owner, name, nil
+}
+
+// validateUIServer checks server.ui_listen (a host:port or "off" that does
+// not clash with listen or metrics_listen) and server.external_url.
+func (c *Config) validateUIServer(add func(string, ...any)) {
+	s := c.Server
+	if ul := s.UIListen; ul != "" && ul != "off" {
+		if _, _, err := net.SplitHostPort(ul); err != nil {
+			add("server.ui_listen: %q is not a host:port address or \"off\"", ul)
+		} else {
+			for _, o := range []struct{ key, addr string }{{"listen", s.Listen}, {"metrics_listen", s.MetricsListen}} {
+				if sameListenAddr(ul, o.addr) {
+					add("server.ui_listen: %q clashes with server.%s %q; use another port", ul, o.key, o.addr)
+				}
+			}
+		}
+	}
+	if eu := s.ExternalURL; eu != "" {
+		u, err := url.Parse(eu)
+		switch {
+		case err != nil:
+			add("server.external_url: %q is not a valid URL", eu)
+		case u.Scheme != "http" && u.Scheme != "https":
+			add("server.external_url: %q must start with http:// or https://", eu)
+		case u.Host == "" || u.Hostname() == "":
+			add("server.external_url: %q has no host", eu)
+		case u.User != nil:
+			add("server.external_url: %q must not contain a user name or password", eu)
+		case u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.Contains(eu, "#"):
+			add("server.external_url: %q must not contain a query (?) or fragment (#)", eu)
+		}
+	}
+}
+
+// sameListenAddr reports whether two host:port listen addresses would bind
+// the same port: equal ports with equal hosts or a wildcard host on either
+// side. Port 0 (any free port) never clashes; "off" and invalid addresses
+// never match.
+func sameListenAddr(a, b string) bool {
+	ah, ap, err := net.SplitHostPort(a)
+	if err != nil {
+		return false
+	}
+	bh, bp, err := net.SplitHostPort(b)
+	if err != nil || ap != bp || ap == "0" {
+		return false
+	}
+	wild := func(h string) bool { return h == "" || h == "0.0.0.0" || h == "::" }
+	return wild(ah) || wild(bh) || strings.EqualFold(ah, bh)
 }

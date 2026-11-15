@@ -1,0 +1,15 @@
+{{define "content"}}
+<h1>Settings</h1>
+<section class="card narrow">
+  <h2>Change password</h2>
+  <p class="muted">After the change, every other browser that is signed in is signed out.</p>
+  <form method="post" action="/settings/password">
+    {{template "csrf" .}}
+    {{template "formerror" .Form}}
+    {{template "field" (field .Form "current" "Current password" "password" "current-password")}}
+    {{template "field" (field .Form "password" "New password" "password" "new-password" "At least 12 characters.")}}
+    {{template "field" (field .Form "confirm" "Type the new password again" "password" "new-password")}}
+    <button class="btn btn-primary" type="submit">Change password</button>
+  </form>
+</section>
+{{end}}
