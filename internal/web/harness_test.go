@@ -19,6 +19,7 @@ import (
 
 	"gitmirror/internal/app"
 	"gitmirror/internal/config"
+	"gitmirror/internal/forge"
 )
 
 const testPassword = "correct horse battery"
@@ -70,21 +71,33 @@ type harness struct {
 	srv   *httptest.Server
 	clock *testClock
 	logs  *syncBuffer
+	// configure, when set, is applied to every new UI before Handler.
+	configure func(*UI)
 }
 
 // buildApp builds an App with no forges or rules on a temp state dir.
 func buildApp(t *testing.T, serverYAML string) *app.App {
+	return buildAppOpts(t, serverYAML, nil)
+}
+
+// gitEnv isolates git from the host configuration under home.
+func gitEnv(home string) []string {
+	return []string{"HOME=" + home, "USERPROFILE=" + home, "XDG_CONFIG_HOME=" + home, "GIT_CONFIG_NOSYSTEM=1",
+		"GIT_CONFIG_GLOBAL=" + filepath.Join(home, ".gitconfig")}
+}
+
+// buildAppOpts builds an App from the config YAML (state_dir is added)
+// whose providers are provs (nil: built from the config).
+func buildAppOpts(t *testing.T, yaml string, provs map[string]forge.Provider) *app.App {
 	t.Helper()
 	home := t.TempDir()
-	y := "state_dir: '" + filepath.ToSlash(filepath.Join(t.TempDir(), "state")) + "'\n" + serverYAML
+	y := "state_dir: '" + filepath.ToSlash(filepath.Join(t.TempDir(), "state")) + "'\n" + yaml
 	cfg, err := config.Parse([]byte(y), func(string) (string, bool) { return "", false },
 		func(string) ([]byte, error) { return nil, os.ErrNotExist })
 	if err != nil {
 		t.Fatal(err)
 	}
-	a, err := app.Build(context.Background(), cfg, app.Options{GitEnv: []string{
-		"HOME=" + home, "USERPROFILE=" + home, "XDG_CONFIG_HOME=" + home, "GIT_CONFIG_NOSYSTEM=1",
-	}})
+	a, err := app.Build(context.Background(), cfg, app.Options{Providers: provs, GitEnv: gitEnv(home)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,6 +130,9 @@ func (h *harness) restart() {
 		Logger:  slog.New(slog.NewTextHandler(h.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 		Clock:   h.clock.Now,
 		BaseURL: "http://gitmirror.test",
+	}
+	if h.configure != nil {
+		h.configure(h.ui)
 	}
 	h.srv = httptest.NewServer(h.ui.Handler())
 	h.t.Cleanup(h.srv.Close)

@@ -137,6 +137,7 @@ Usage:
 Available Commands:
   help        Help about any command
   plan        Show what a sync would do, without changing anything
+  reset-admin Forget the web UI admin password and sign everyone out
   serve       Run the daemon: scheduled syncs, webhooks, /healthz, /readyz and /metrics (own listener)
   status      Show the last known state of every pair (no network)
   sync        Mirror every pair now

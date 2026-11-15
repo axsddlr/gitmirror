@@ -62,6 +62,12 @@
   <input id="{{.Name}}" name="{{.Name}}" type="{{.Type}}" value="{{.Value}}"
     {{- if .Autocomplete}} autocomplete="{{.Autocomplete}}"{{end}}
     {{- if .Error}} aria-invalid="true"{{end}}
-    {{- if or .Hint .Error}} aria-describedby="{{if .Hint}}{{.Name}}-hint{{end}}{{if and .Hint .Error}} {{end}}{{if .Error}}{{.Name}}-error{{end}}"{{end}} required>
+    {{- if or .Hint .Error}} aria-describedby="{{if .Hint}}{{.Name}}-hint{{end}}{{if and .Hint .Error}} {{end}}{{if .Error}}{{.Name}}-error{{end}}"{{end}}{{if not .Optional}} required{{end}}>
 </div>
 {{end}}
+
+{{/* status is a statusView: icon and words, coloured by class. */}}
+{{define "status"}}<span class="status status-{{.Class}}"><span aria-hidden="true">{{.Icon}}</span> {{.Label}}</span>{{end}}
+
+{{/* problem is a *problem: plain words plus the technical text on demand. */}}
+{{define "problem"}}{{if .}}<div class="problem"><p>{{.Text}}</p>{{if .Detail}}<details><summary>Technical details</summary><pre>{{.Detail}}</pre></details>{{end}}</div>{{end}}{{end}}

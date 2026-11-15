@@ -47,8 +47,8 @@ On SIGINT/SIGTERM it stops scheduling, lets running syncs finish for up to
 			if err != nil {
 				return &exitError{exitFailed, fmt.Errorf("listen on %s: %w", cfg.Server.Listen, err)}
 			}
-			if cfg.Server.WebhookSecret == "" {
-				c.logger.Warn("no server.webhook_secret configured; webhooks are disabled")
+			if sec, _ := a.WebhookSecret(); sec == "" {
+				c.logger.Warn("no webhook secret configured (server.webhook_secret or the web UI's Webhooks page); webhooks are disabled")
 			}
 			c.logger.Info("listening", "addr", ln.Addr().String())
 			s := &server.Server{App: a, Logger: c.logger, ShutdownTimeout: shutdownTimeout}
@@ -73,7 +73,7 @@ On SIGINT/SIGTERM it stops scheduling, lets running syncs finish for up to
 				}
 				base := "http://" + uln.Addr().String()
 				c.logger.Info("web UI: " + base)
-				ui := &web.UI{App: a, Logger: c.logger, BaseURL: base}
+				ui := &web.UI{App: a, Logger: c.logger, BaseURL: base, SyncNow: s.SyncNow, SyncAll: s.SyncAll}
 				s.UIListener, s.UIHandler = uln, ui.Handler()
 			} else {
 				c.logger.Info("web UI is disabled (server.ui_listen: off)")

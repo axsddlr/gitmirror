@@ -112,6 +112,9 @@ type UIConfig struct {
 	Rules  map[string]config.Rule
 
 	file *config.Config
+	// externalURL and webhookSecret are the web UI's server settings
+	// (settings table); merge uses each only when the file leaves it unset.
+	externalURL, webhookSecret string
 }
 
 // PutForge adds or replaces the UI forge name.
@@ -174,7 +177,8 @@ func (u *UIConfig) LogValue() slog.Value {
 }
 
 func (u *UIConfig) clone() *UIConfig {
-	c := &UIConfig{Forges: maps.Clone(u.Forges), Rules: make(map[string]config.Rule, len(u.Rules)), file: u.file}
+	c := &UIConfig{Forges: maps.Clone(u.Forges), Rules: make(map[string]config.Rule, len(u.Rules)), file: u.file,
+		externalURL: u.externalURL, webhookSecret: u.webhookSecret}
 	for n, r := range u.Rules {
 		c.Rules[n] = config.CloneRule(r)
 	}
@@ -211,10 +215,8 @@ func (a *App) UpdateUI(ctx context.Context, fn func(*UIConfig) error) error {
 	if err := fn(next); err != nil {
 		return err
 	}
-	for name, r := range next.Rules {
-		if r.Name != name {
-			return fmt.Errorf("rule stored under key %q is named %q", name, r.Name)
-		}
+	if err := checkRuleKeys(next); err != nil {
+		return err
 	}
 	eff, provs, err := a.effective(next)
 	if err != nil {
@@ -308,6 +310,9 @@ func (a *App) loadUI(ctx context.Context) (*UIConfig, error) {
 		}
 		u.Rules[r.Name] = rule
 	}
+	if err := a.loadServerSettings(ctx, u); err != nil {
+		return nil, err
+	}
 	return u, nil
 }
 
@@ -317,7 +322,7 @@ func (u *UIConfig) merge() (*config.Config, error) {
 	for _, n := range slices.Sorted(maps.Keys(u.Rules)) {
 		rules = append(rules, u.Rules[n])
 	}
-	eff, err := config.Merge(u.file, u.Forges, rules)
+	eff, err := config.Merge(u.withServerSettings(), u.Forges, rules)
 	if err != nil {
 		return nil, configError{err}
 	}
@@ -344,6 +349,9 @@ func (a *App) install(eff *config.Config, provs map[string]forge.Provider) {
 		toks := make([]string, 0, len(eff.Forges))
 		for _, f := range eff.Forges {
 			toks = append(toks, f.Token)
+		}
+		if eff.Server.WebhookSecret != "" {
+			toks = append(toks, eff.Server.WebhookSecret)
 		}
 		a.opts.Redact(toks...)
 	}

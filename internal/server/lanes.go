@@ -34,6 +34,29 @@ func (s *Server) enqueueScheduled(rule string) {
 	wake(s.schedWake)
 }
 
+// SyncNow queues a full sync of rule in the scheduled lane, as if its
+// interval had elapsed (a rule already waiting is not queued twice). An
+// unknown rule is an error wrapping app.ErrNoMatch. Safe to call before Run;
+// the job then starts once Run does.
+func (s *Server) SyncNow(rule string) error {
+	s.init()
+	if s.App.Config().RuleOrigin(rule) == "" {
+		return fmt.Errorf("%w: unknown rule %q", app.ErrNoMatch, rule)
+	}
+	s.enqueueScheduled(rule)
+	return nil
+}
+
+// SyncAll queues a full sync of every rule in the scheduled lane (see
+// SyncNow).
+func (s *Server) SyncAll() error {
+	s.init()
+	for _, r := range s.App.Config().Rules {
+		s.enqueueScheduled(r.Name)
+	}
+	return nil
+}
+
 // queuedRules returns the scheduled lane's waiting rules in order.
 func (s *Server) queuedRules() []string {
 	s.mu.Lock()

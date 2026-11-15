@@ -195,17 +195,6 @@ func (u *UI) logout(w http.ResponseWriter, r *http.Request) {
 
 // ---- pages ----
 
-func (u *UI) dashboard(w http.ResponseWriter, r *http.Request) {
-	u.render(w, r, "dashboard", View{Title: "Dashboard", Section: "dashboard", Data: len(u.App.Config().Rules)})
-}
-
-// comingSoon is the placeholder of a page that a later version fills in.
-func (u *UI) comingSoon(section, title, text string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		u.render(w, r, "soon", View{Title: title, Section: section, Data: text})
-	}
-}
-
 func (u *UI) notFound(w http.ResponseWriter, r *http.Request) {
 	u.render(w, r, "message", View{
 		Title:  "Page not found",

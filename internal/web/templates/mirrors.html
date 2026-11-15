@@ -1,0 +1,40 @@
+{{define "content"}}
+{{- $d := .Data}}
+<div class="page-head">
+  <h1>Mirrors</h1>
+  {{if $d.Sites}}<a class="btn btn-primary" href="/mirrors/new">New mirror</a>{{end}}
+</div>
+<p class="lead">A mirror copies repositories from one site to another, one way, and keeps the copies up to date.</p>
+{{if not $d.Sites}}
+<section class="card empty">
+  <h2>Add a site first</h2>
+  <p>Before you can set up a mirror, add the site to copy from and the site to copy to.</p>
+  <p><a class="btn btn-primary" href="/sites/new">Add a site</a></p>
+</section>
+{{else if not $d.List}}
+<section class="card empty">
+  <h2>No mirrors yet</h2>
+  <p>Set up a mirror to start copying. You will see what it does before anything is saved.</p>
+  <p><a class="btn btn-primary" href="/mirrors/new">Set up a mirror</a></p>
+</section>
+{{else}}
+<table class="table">
+  <thead><tr><th scope="col">Name</th><th scope="col">What</th><th scope="col">How often</th><th scope="col">Last result</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
+  <tbody>
+  {{- range $d.List}}
+  <tr>
+    <td data-label="Name"><strong>{{.Name}}</strong></td>
+    <td data-label="What">{{.From}}<br>→ {{.To}}</td>
+    <td data-label="How often">{{.Every}}</td>
+    <td data-label="Last result">{{template "status" .Status}}{{if .LastRunAbs}}<br><time class="muted" title="{{.LastRunAbs}}">{{.LastRun}}</time>{{end}}</td>
+    <td class="row-actions">
+      {{- if $d.CanSync}}<form class="inline" method="post" action="/mirrors/{{.Name}}/sync">{{template "csrf" $}}<button class="btn btn-small" type="submit">Sync now</button></form>{{end}}
+      {{- if .FromFile}} <span class="muted">From config file — edit it there</span>
+      {{- else}} <a class="btn btn-small" href="/mirrors/{{.Name}}/edit">Edit</a> <a class="btn btn-small" href="/mirrors/{{.Name}}/delete">Delete</a>{{end}}
+    </td>
+  </tr>
+  {{- end}}
+  </tbody>
+</table>
+{{end}}
+{{end}}

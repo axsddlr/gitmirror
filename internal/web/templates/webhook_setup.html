@@ -1,0 +1,24 @@
+{{define "content"}}
+{{- $d := .Data}}
+<p><a href="/webhooks">← Webhooks</a></p>
+<h1>{{.Title}}</h1>
+<p>Payload URL: <code>{{$d.PayloadURL}}</code></p>
+{{range $d.Problems}}<div class="problem"><p>{{.}}</p></div>{{end}}
+{{if $d.Results}}
+<table class="table">
+  <thead><tr><th scope="col">Where</th><th scope="col">Result</th><th scope="col">Details</th></tr></thead>
+  <tbody>
+  {{- range $d.Results}}
+  <tr>
+    <td data-label="Where">{{.Target}}{{if .Org}} <span class="badge">organisation</span>{{end}}</td>
+    <td data-label="Result">{{template "status" .Status}}</td>
+    <td data-label="Details">{{.Outcome}}{{if .Detail}}<details><summary>Technical details</summary><pre>{{.Detail}}</pre></details>{{end}}</td>
+  </tr>
+  {{- end}}
+  </tbody>
+</table>
+{{else}}
+<p>There are no repositories to set up webhooks for yet.</p>
+{{end}}
+<p><a class="btn" href="/webhooks">Back to Webhooks</a></p>
+{{end}}

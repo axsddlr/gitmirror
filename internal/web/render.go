@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"slices"
 	"strings"
 )
 
@@ -90,6 +91,8 @@ func (f *Form) OK() bool { return f.Message == "" && len(f.Errors) == 0 }
 // fieldData is the data of the "field" template.
 type fieldData struct {
 	Name, Label, Type, Value, Error, Autocomplete, Hint string
+	// Optional drops the required attribute (see the "optional" func).
+	Optional bool
 }
 
 // field builds the data of the "field" template:
@@ -111,7 +114,20 @@ func field(f *Form, name, label, typ, autocomplete string, hint ...string) field
 	return d
 }
 
-var funcs = template.FuncMap{"field": field}
+// optional marks a field as not required:
+//
+//	{{template "field" (optional (field .Form "name" "Label" "text" "off"))}}
+func optional(d fieldData) fieldData {
+	d.Optional = true
+	return d
+}
+
+var funcs = template.FuncMap{
+	"field":    field,
+	"optional": optional,
+	// has reports whether list contains s (checked boxes of multi-value fields).
+	"has": func(list []string, s string) bool { return slices.Contains(list, s) },
+}
 
 // mustParsePages parses templates/layout.html together with each other
 // template file; the page name is the file name without ".html".

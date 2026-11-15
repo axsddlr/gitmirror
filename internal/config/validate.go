@@ -363,20 +363,34 @@ func (c *Config) validateUIServer(add func(string, ...any)) {
 		}
 	}
 	if eu := s.ExternalURL; eu != "" {
-		u, err := url.Parse(eu)
-		switch {
-		case err != nil:
-			add("server.external_url: %q is not a valid URL", eu)
-		case u.Scheme != "http" && u.Scheme != "https":
-			add("server.external_url: %q must start with http:// or https://", eu)
-		case u.Host == "" || u.Hostname() == "":
-			add("server.external_url: %q has no host", eu)
-		case u.User != nil:
-			add("server.external_url: %q must not contain a user name or password", eu)
-		case u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.Contains(eu, "#"):
-			add("server.external_url: %q must not contain a query (?) or fragment (#)", eu)
+		if err := ValidateExternalURL(eu); err != nil {
+			add("server.external_url: %v", err)
 		}
 	}
+}
+
+// ValidName reports whether s is a valid forge or rule name: lowercase
+// letters, digits, "-" and "_", starting with a letter or digit.
+func ValidName(s string) bool { return identRe.MatchString(s) }
+
+// ValidateExternalURL checks a server.external_url value (already trimmed
+// of spaces and trailing slashes): an absolute http(s) URL with a host and
+// no user info, query or fragment.
+func ValidateExternalURL(eu string) error {
+	u, err := url.Parse(eu)
+	switch {
+	case err != nil:
+		return fmt.Errorf("%q is not a valid URL", eu)
+	case u.Scheme != "http" && u.Scheme != "https":
+		return fmt.Errorf("%q must start with http:// or https://", eu)
+	case u.Host == "" || u.Hostname() == "":
+		return fmt.Errorf("%q has no host", eu)
+	case u.User != nil:
+		return fmt.Errorf("%q must not contain a user name or password", eu)
+	case u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.Contains(eu, "#"):
+		return fmt.Errorf("%q must not contain a query (?) or fragment (#)", eu)
+	}
+	return nil
 }
 
 // sameListenAddr reports whether two host:port listen addresses would bind

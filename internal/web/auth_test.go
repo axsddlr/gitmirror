@@ -437,13 +437,13 @@ func TestPages(t *testing.T) {
 	c := h.admin()
 	r := c.get("/")
 	for _, want := range []string{"gitmirror", "Dashboard", "Sites", "Mirrors", "Webhooks", "Settings", "Sign out",
-		"No mirrors yet", `href="/sites"`, `aria-current="page"`} {
+		"Start by adding a site", `href="/sites"`, `aria-current="page"`} {
 		if !strings.Contains(r.body, want) {
 			t.Errorf("dashboard lacks %q", want)
 		}
 	}
 	for _, p := range []string{"/sites", "/mirrors", "/webhooks"} {
-		if r := c.get(p); r.code != http.StatusOK || !strings.Contains(r.body, "coming soon") {
+		if r := c.get(p); r.code != http.StatusOK || strings.Contains(r.body, "coming soon") {
 			t.Errorf("%s = %d", p, r.code)
 		}
 	}

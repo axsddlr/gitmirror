@@ -40,6 +40,11 @@ type UI struct {
 	// BaseURL is the address printed in the first-run setup message, e.g.
 	// "http://127.0.0.1:8090". server.external_url, when set, wins.
 	BaseURL string
+	// SyncNow, when set, queues a sync of one mirror (rule) right away. The
+	// "Sync now" buttons are hidden while it is nil (no daemon).
+	SyncNow func(rule string) error
+	// SyncAll, when set, queues a sync of every mirror right away.
+	SyncAll func() error
 
 	once     sync.Once
 	handler  http.Handler
@@ -115,12 +120,31 @@ func (u *UI) routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /logout", u.logout)
 
 	mux.Handle("GET /{$}", u.requireAuth(u.dashboard))
-	mux.Handle("GET /sites", u.requireAuth(u.comingSoon("sites", "Sites",
-		"Here you will add the places your code lives, such as GitHub or your own Gitea server.")))
-	mux.Handle("GET /mirrors", u.requireAuth(u.comingSoon("mirrors", "Mirrors",
-		"Here you will choose which repositories are copied from one site to another.")))
-	mux.Handle("GET /webhooks", u.requireAuth(u.comingSoon("webhooks", "Webhooks",
-		"Here you will set up instant updates, so changes are copied right away instead of on a schedule.")))
+	mux.Handle("GET /pair", u.requireAuth(u.pairPage))
+	mux.Handle("POST /sync", u.requireAuth(u.syncAll))
+
+	mux.Handle("GET /sites", u.requireAuth(u.sitesPage))
+	mux.Handle("GET /sites/new", u.requireAuth(u.newSitePage))
+	mux.Handle("POST /sites/new", u.requireAuth(u.addSite))
+	mux.Handle("GET /sites/{name}/edit", u.requireAuth(u.editSitePage))
+	mux.Handle("POST /sites/{name}/edit", u.requireAuth(u.editSite))
+	mux.Handle("GET /sites/{name}/delete", u.requireAuth(u.deleteSitePage))
+	mux.Handle("POST /sites/{name}/delete", u.requireAuth(u.deleteSite))
+
+	mux.Handle("GET /mirrors", u.requireAuth(u.mirrorsPage))
+	mux.Handle("GET /mirrors/new", u.requireAuth(u.newMirrorPage))
+	mux.Handle("POST /mirrors/wizard", u.requireAuth(u.wizardSubmit))
+	mux.Handle("GET /mirrors/{name}/edit", u.requireAuth(u.editMirrorPage))
+	mux.Handle("GET /mirrors/{name}/delete", u.requireAuth(u.deleteMirrorPage))
+	mux.Handle("POST /mirrors/{name}/delete", u.requireAuth(u.deleteMirror))
+	mux.Handle("POST /mirrors/{name}/sync", u.requireAuth(u.syncMirror))
+
+	mux.Handle("GET /webhooks", u.requireAuth(u.webhooksPage))
+	mux.Handle("POST /webhooks/address", u.requireAuth(u.setPublicAddress))
+	mux.Handle("GET /webhooks/secret/new", u.requireAuth(u.newSecretPage))
+	mux.Handle("POST /webhooks/secret/new", u.requireAuth(u.newSecret))
+	mux.Handle("POST /webhooks/{site}/setup", u.requireAuth(u.setupHooks))
+
 	mux.Handle("GET /settings", u.requireAuth(u.settingsPage))
 	mux.Handle("POST /settings/password", u.requireAuth(u.changePassword))
 

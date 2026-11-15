@@ -9,6 +9,25 @@
 // hands UI.Handler() to server.Server.UIHandler; the server serves it on
 // Server.UIListener and shuts it down with the rest.
 //
+// UI.SyncNow and UI.SyncAll (serve wires them to server.Server.SyncNow /
+// SyncAll) queue syncs from the "Sync now" buttons; while nil the buttons
+// are hidden.
+//
+// # Pages
+//
+//   - / (dashboard.go): mirrors with the stored state of their pairs;
+//     /pair?k=<id> shows one pair's recent runs and steps.
+//   - /sites (sites.go): forges. Adding or changing one tests the token
+//     (App.CheckForge) before saving; tokens are never rendered.
+//   - /mirrors (dashboard.go, wizard.go): rules, and the step-by-step
+//     mirror form that previews with App.Preview (a dry run) before Save.
+//   - /webhooks (webhooks.go): public address and webhook secret (stored by
+//     the App when the config file has none) and "Set up webhooks for me".
+//   - Problems are put in plain words by explain (plain.go).
+//
+// Entries of the config file are read-only: their pages say so and every
+// POST that would change one is refused (403), whatever the form says.
+//
 // The setup code is generated on the first Handler call (and again on any
 // later request if no admin exists and no code is pending): while the
 // settings key "admin_password" is unset, Handler logs at WARN

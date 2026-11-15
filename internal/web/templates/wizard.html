@@ -1,0 +1,194 @@
+{{define "content"}}
+{{- $v := .Data}}{{$w := $v.W}}{{$e := .Form.Errors}}
+<h1>{{.Title}}</h1>
+<ol class="steps" aria-label="Steps">
+  {{- range $v.Steps}}<li{{if .Checked}} aria-current="step"{{end}}>{{.Label}}</li>{{end}}
+</ol>
+<section class="card">
+<form method="post" action="/mirrors/wizard">
+  {{template "csrf" .}}
+  {{- range $v.Hidden}}
+  <input type="hidden" name="{{.Name}}" value="{{.Value}}">
+  {{- end}}
+  {{template "formerror" .Form}}
+
+{{if eq $v.Step "from"}}
+  <h2>Step {{$v.StepNo}} of 5: Copy from</h2>
+  <fieldset class="choices{{if $e.src}} has-error{{end}}">
+    <legend>Site to copy from</legend>
+    {{- with $e.src}}<p class="error">{{.}}</p>{{end}}
+    {{- range $v.Sites}}
+    <label class="choice"><input type="radio" name="src" value="{{.Name}}"{{if eq .Name $w.Src}} checked{{end}}> <strong>{{.Name}}</strong> <span class="hint-inline">{{.Kind}}, {{.Address}}{{if .Account}}, signed in as {{.Account}}{{end}}</span></label>
+    {{- end}}
+    <p class="hint">Missing a site? <a href="/sites/new">Add it on the Sites page</a> first.</p>
+  </fieldset>
+  <fieldset class="choices{{if $e.mode}} has-error{{end}}">
+    <legend>What to copy</legend>
+    {{- with $e.mode}}<p class="error">{{.}}</p>{{end}}
+    {{- range $v.Modes}}
+    <label class="choice"><input type="radio" name="mode" value="{{.Value}}"{{if .Checked}} checked{{end}}> {{.Label}} <span class="hint-inline">{{.Hint}}</span></label>
+    {{- end}}
+  </fieldset>
+  <div class="field{{if $e.account}} has-error{{end}}">
+    <label for="account">Account or organisation (optional)</label>
+    <p class="hint" id="account-hint">Whose repositories to copy. Leave empty to use the account the site's token signs in as.</p>
+    {{- with $e.account}}<p class="error" id="account-error">{{.}}</p>{{end}}
+    <input id="account" name="account" type="text" value="{{$w.Account}}" autocomplete="off" aria-describedby="account-hint{{if $e.account}} account-error{{end}}"{{if $e.account}} aria-invalid="true"{{end}}>
+  </div>
+  <div class="actions">
+    <button class="btn btn-primary" type="submit" name="go" value="next">Next</button>
+    <a class="btn" href="/mirrors">Cancel</a>
+  </div>
+
+{{else if eq $v.Step "repos"}}
+  {{if eq $w.Mode "pick"}}
+  <h2>Step {{$v.StepNo}} of 5: Choose repositories of {{$w.Account}}</h2>
+  <div class="field">
+    <label for="q">Search by name</label>
+    <div class="search-row">
+      <input id="q" name="q" type="search" value="{{$w.Query}}" autocomplete="off">
+      <button class="btn" type="submit" name="go" value="search">Search</button>
+    </div>
+  </div>
+  <div class="toggles">
+    <label class="choice"><input type="checkbox" name="forks" value="1"{{if $w.Forks}} checked{{end}}> Show forks</label>
+    <label class="choice"><input type="checkbox" name="archived" value="1"{{if $w.Archived}} checked{{end}}> Show archived repositories</label>
+    <button class="btn btn-small" type="submit" name="go" value="search">Update list</button>
+  </div>
+  <fieldset class="choices repo-list{{if $e.repo}} has-error{{end}}">
+    <legend>Repositories to copy <span class="hint-inline">{{$v.Picked}} ticked, {{$v.Listed}} on the account</span></legend>
+    {{- with $e.repo}}<p class="error">{{.}}</p>{{end}}
+    {{- range $v.Repos}}
+    <label class="choice"><input type="checkbox" name="repo" value="{{.Name}}"{{if .Checked}} checked{{end}}> <strong>{{.Name}}</strong>
+      {{- if .Private}} <span class="badge">private</span>{{end}}{{if .Fork}} <span class="badge">fork</span>{{end}}{{if .Archived}} <span class="badge">archived</span>{{end}}
+      {{- if .Description}} <span class="hint-inline">{{.Description}}</span>{{end}}</label>
+    {{- else}}
+    <p class="muted">No repositories match.</p>
+    {{- end}}
+  </fieldset>
+  {{else}}
+  <h2>Step {{$v.StepNo}} of 5: Which repositories of {{$w.Account}}</h2>
+  <p>{{if eq $w.Mode "starred"}}Every repository starred by {{$w.Account}} is copied, also ones starred later.{{else}}Every repository of {{$w.Account}} is copied, also ones added later.{{end}}</p>
+  <div class="toggles">
+    <label class="choice"><input type="checkbox" name="forks" value="1"{{if $w.Forks}} checked{{end}}> Include forks <span class="hint-inline">Copies of other people's repositories.</span></label>
+    <label class="choice"><input type="checkbox" name="archived" value="1"{{if $w.Archived}} checked{{end}}> Include archived repositories <span class="hint-inline">Read-only repositories that are no longer worked on.</span></label>
+  </div>
+  {{end}}
+  <div class="actions">
+    <button class="btn btn-primary" type="submit" name="go" value="next">Next</button>
+    <button class="btn" type="submit" name="go" value="back" formnovalidate>Back</button>
+  </div>
+
+{{else if eq $v.Step "to"}}
+  <h2>Step {{$v.StepNo}} of 5: Copy to</h2>
+  <fieldset class="choices{{if $e.dst}} has-error{{end}}">
+    <legend>Site to copy to</legend>
+    {{- with $e.dst}}<p class="error">{{.}}</p>{{end}}
+    {{- range $v.Sites}}
+    <label class="choice"><input type="radio" name="dst" value="{{.Name}}"{{if eq .Name $w.Dst}} checked{{end}}> <strong>{{.Name}}</strong> <span class="hint-inline">{{.Kind}}, {{.Address}}{{if .Account}}, signed in as {{.Account}}{{end}}</span></label>
+    {{- end}}
+  </fieldset>
+  <div class="field{{if $e.dstowner}} has-error{{end}}">
+    <label for="dstowner">Account or organisation to copy into (optional)</label>
+    <p class="hint" id="dstowner-hint">Leave empty to use the account the site's token signs in as. On Gitea and Forgejo a missing organisation is created.</p>
+    {{- with $e.dstowner}}<p class="error" id="dstowner-error">{{.}}</p>{{end}}
+    <input id="dstowner" name="dstowner" type="text" value="{{$w.DstOwner}}" autocomplete="off" aria-describedby="dstowner-hint{{if $e.dstowner}} dstowner-error{{end}}"{{if $e.dstowner}} aria-invalid="true"{{end}}>
+  </div>
+  <fieldset class="choices{{if $e.naming}} has-error{{end}}">
+    <legend>Names of the copies</legend>
+    {{- with $e.naming}}<p class="error">{{.}}</p>{{end}}
+    {{- range $v.Namings}}
+    <label class="choice"><input type="radio" name="naming" value="{{.Value}}"{{if .Checked}} checked{{end}}> {{.Label}} <span class="hint-inline">{{.Hint}}</span></label>
+    {{- end}}
+  </fieldset>
+  {{if and (eq $w.Mode "pick") (eq (len $w.Picked) 1)}}
+  <div class="field{{if $e.dstname}} has-error{{end}}">
+    <label for="dstname">Name of my own (optional)</label>
+    <p class="hint" id="dstname-hint">Used with “A name of my own”.</p>
+    {{- with $e.dstname}}<p class="error" id="dstname-error">{{.}}</p>{{end}}
+    <input id="dstname" name="dstname" type="text" value="{{$w.DstName}}" autocomplete="off" aria-describedby="dstname-hint{{if $e.dstname}} dstname-error{{end}}">
+  </div>
+  {{end}}
+  <div class="actions">
+    <button class="btn btn-primary" type="submit" name="go" value="next">Next</button>
+    <button class="btn" type="submit" name="go" value="back" formnovalidate>Back</button>
+  </div>
+
+{{else if eq $v.Step "options"}}
+  <h2>Step {{$v.StepNo}} of 5: Options</h2>
+  <p class="muted">The safe choices are already selected.</p>
+  <fieldset class="choices">
+    <legend>What to copy</legend>
+    <label class="choice"><input type="checkbox" checked disabled> Code, with all branches and tags <span class="hint-inline">Always copied.</span></label>
+    {{- range $v.Features}}
+    <label class="choice"><input type="checkbox" name="feat" value="{{.Value}}"{{if .Checked}} checked{{end}}> {{.Label}} <span class="hint-inline">{{.Hint}}</span></label>
+    {{- end}}
+  </fieldset>
+  <fieldset class="choices{{if $e.visibility}} has-error{{end}}">
+    <legend>Who can see new copies</legend>
+    {{- with $e.visibility}}<p class="error">{{.}}</p>{{end}}
+    <label class="choice"><input type="radio" name="visibility" value="private"{{if eq $w.Visibility "private"}} checked{{end}}> Private <span class="hint-inline">Only people with access at the destination.</span></label>
+    <label class="choice"><input type="radio" name="visibility" value="match-source"{{if eq $w.Visibility "match-source"}} checked{{end}}> Same as the original <span class="hint-inline">Public originals get public copies; never more public than the original.</span></label>
+  </fieldset>
+  <div class="field{{if $e.interval}} has-error{{end}}">
+    <label for="interval">How often to copy</label>
+    <p class="hint" id="interval-hint">Changes are picked up on this schedule. With webhooks they are copied within seconds as well.</p>
+    {{- with $e.interval}}<p class="error">{{.}}</p>{{end}}
+    <select id="interval" name="interval" aria-describedby="interval-hint">
+      {{- range $v.Intervals}}<option value="{{.Value}}"{{if .Checked}} selected{{end}}>{{.Label}}</option>{{end}}
+    </select>
+  </div>
+  <fieldset class="choices">
+    <legend>Existing repositories</legend>
+    <label class="choice"><input type="checkbox" name="adopt" value="1"{{if $w.Adopt}} checked{{end}}> Allow copying into repositories that already exist <span class="hint-inline">Off by default: gitmirror only writes to repositories it created.</span></label>
+    <p class="warning"><strong>Careful:</strong> when ticked, a repository that already exists at the destination with the same name has its content replaced to match the original. Changes made only there are lost.</p>
+  </fieldset>
+  <div class="field{{if $e.name}} has-error{{end}}">
+    <label for="name">Name of this mirror</label>
+    <p class="hint" id="name-hint">A short name to recognise it. Lowercase letters, digits, - and _.</p>
+    {{- with $e.name}}<p class="error" id="name-error">{{.}}</p>{{end}}
+    <input id="name" name="name" type="text" value="{{$w.Name}}" autocomplete="off" required aria-describedby="name-hint{{if $e.name}} name-error{{end}}"{{if $e.name}} aria-invalid="true"{{end}}>
+  </div>
+  <div class="actions">
+    <button class="btn btn-primary" type="submit" name="go" value="preview">Preview</button>
+    <button class="btn" type="submit" name="go" value="back" formnovalidate>Back</button>
+  </div>
+
+{{else}}
+  <h2>Step {{$v.StepNo}} of 5: Check and save</h2>
+  <dl class="facts">
+    <dt>Mirror</dt><dd>{{$w.Name}}</dd>
+    <dt>Copies</dt><dd>{{$v.FromLabel}} → {{$v.ToLabel}}</dd>
+    <dt>How often</dt><dd>{{$v.Every}}</dd>
+    <dt>Who can see new copies</dt><dd>{{if eq $w.Visibility "private"}}Private{{else}}Same as the original{{end}}</dd>
+  </dl>
+  {{if $w.Adopt}}<p class="warning"><strong>Careful:</strong> repositories that already exist at the destination will be replaced to match the original.</p>{{end}}
+  <h3>What would happen now</h3>
+  <p class="muted">This is a trial run: nothing has been copied or saved yet.</p>
+  {{with $v.Preview}}
+  {{- range .Problems}}<div class="problem"><p>{{.}}</p></div>{{end}}
+  {{if .Rows}}
+  <table class="table">
+    <thead><tr><th scope="col">Original</th><th scope="col">Copy</th><th scope="col">What happens</th></tr></thead>
+    <tbody>
+    {{- range .Rows}}
+    <tr>
+      <td data-label="Original">{{.Src}}</td>
+      <td data-label="Copy">{{.Dst}}</td>
+      <td data-label="What happens">{{template "status" .Status}} {{.Outcome}}{{if .Detail}}<details><summary>Technical details</summary><pre>{{.Detail}}</pre></details>{{end}}</td>
+    </tr>
+    {{- end}}
+    </tbody>
+  </table>
+  {{else}}
+  <p>No repositories match right now, so nothing would be copied yet. Repositories that appear later are copied on the schedule.</p>
+  {{end}}
+  {{end}}
+  <div class="actions">
+    <button class="btn btn-primary" type="submit" name="go" value="save">Save mirror</button>
+    <button class="btn" type="submit" name="go" value="back" formnovalidate>Back</button>
+  </div>
+{{end}}
+</form>
+</section>
+{{end}}
