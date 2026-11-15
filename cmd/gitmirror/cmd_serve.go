@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"gitmirror/internal/app"
+	"gitmirror/internal/config"
 	"gitmirror/internal/server"
 )
 
@@ -30,12 +31,14 @@ On SIGINT/SIGTERM it stops scheduling, lets running syncs finish for up to
 			if err != nil {
 				return err
 			}
-			opts := appOptions()
-			opts.Logger = c.logger
+			opts := c.options()
 			opts.LockTimeout = lockTimeout
 			a, err := app.Build(cmd.Context(), cfg, opts)
 			if err != nil {
-				return &exitError{exitFailed, err}
+				return c.buildError(err)
+			}
+			if len(a.Config().Rules) == 0 {
+				c.logger.Warn(config.ErrNoRules.Error() + "; idling until rules are added")
 			}
 			defer a.Close()
 			ln, err := net.Listen("tcp", cfg.Server.Listen)

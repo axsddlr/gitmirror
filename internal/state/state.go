@@ -1,7 +1,8 @@
 // Package state persists gitmirror's durable safety state in SQLite:
 // destination ownership, per-pair last-known digests, run history, the
-// release id mapping, when a pair's source was first seen missing and an
-// append-only audit log of destination create/adopt/archive/delete actions.
+// release id mapping, when a pair's source was first seen missing, an
+// append-only audit log of destination create/adopt/archive/delete actions,
+// and the forges, rules and settings managed in the web UI (see ui.go).
 //
 // Times are stored as int64 unix nanoseconds (UTC); 0 means "unset" and is
 // returned as the zero time.Time. Nanosecond storage round-trips exactly.

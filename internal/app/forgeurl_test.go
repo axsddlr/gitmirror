@@ -37,7 +37,7 @@ func TestBuildSetsEngineForgeURLs(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer a.Close()
-	if got := a.Engine.ForgeURLs["dst"]; got != "https://dst.example" {
-		t.Fatalf("Engine.ForgeURLs[dst] = %q (all %v)", got, a.Engine.ForgeURLs)
+	if got := a.Snapshot().ForgeURLs["dst"]; got != "https://dst.example" {
+		t.Fatalf("Snapshot().ForgeURLs[dst] = %q (all %v)", got, a.Snapshot().ForgeURLs)
 	}
 }

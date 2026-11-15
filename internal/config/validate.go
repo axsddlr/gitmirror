@@ -31,6 +31,8 @@ type RepoRef struct {
 // Safety checks (self-mirroring, duplicate destinations, mirror loops) only
 // apply to literal `repo:` destinations; templated destinations can only be
 // checked at runtime.
+//
+// A config without rules is valid (see ErrNoRules).
 func (c *Config) Validate() error {
 	var errs []error
 	add := func(format string, a ...any) { errs = append(errs, fmt.Errorf(format, a...)) }
@@ -57,9 +59,6 @@ func (c *Config) Validate() error {
 	validateSettings("defaults", c.Defaults.Interval, c.Defaults.Include, c.Defaults.Visibility, c.Defaults.OnSourceDeleted, c.Defaults.DeletionGrace, true, add)
 	validateDeletionGuard("defaults", c.Defaults.MaxRefDeletions, c.Defaults.MaxRefDeletionsPercent, add)
 
-	if len(c.Rules) == 0 {
-		add("rules: at least one rule is required")
-	}
 	seen := map[string]int{}
 	for i, r := range c.Rules {
 		loc := fmt.Sprintf("rules[%d]", i)

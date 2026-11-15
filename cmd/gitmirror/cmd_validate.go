@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"gitmirror/internal/app"
+	"gitmirror/internal/config"
 	"gitmirror/internal/forge"
 	"gitmirror/internal/gitx"
 	"gitmirror/internal/resolve"
@@ -59,7 +61,7 @@ func (c *cli) validateCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().BoolVar(&offline, "offline", false, "only check the config and local tools; no network")
+	cmd.Flags().BoolVar(&offline, "offline", false, "only check the config file and local tools; no network (web UI entries are not checked)")
 	return cmd
 }
 
@@ -88,11 +90,34 @@ func (c *cli) validate(ctx context.Context, offline bool) (int, error) {
 		}
 		return finish(exitUsage)
 	}
+	opts := c.options()
+	if !offline {
+		// Check the effective config: the file plus the web UI entries.
+		eff, err := app.LoadEffective(ctx, cfg, opts)
+		if errors.Is(err, app.ErrConfig) {
+			doc.Problems = flatten(err)
+			for _, p := range doc.Problems {
+				say("config: %s", p)
+			}
+			return finish(exitUsage)
+		}
+		if err != nil {
+			return exitFailed, err
+		}
+		cfg = eff
+		if len(cfg.Rules) == 0 {
+			doc.Problems = []string{config.ErrNoRules.Error()}
+			say("config: %s", config.ErrNoRules)
+			return finish(exitUsage)
+		}
+	}
 	doc.Valid = true
 	doc.NumForges, doc.NumRules = len(cfg.Forges), len(cfg.Rules)
 	say("config: ok (%d forges, %d rules)", len(cfg.Forges), len(cfg.Rules))
+	if offline {
+		say("config: forges and rules managed in the web UI are not checked offline")
+	}
 
-	opts := appOptions()
 	failed := false
 	v, err := (&gitx.Runner{Env: opts.GitEnv, UseHostConfig: cfg.Git.UseHostConfig}).Check(ctx)
 	if err != nil {

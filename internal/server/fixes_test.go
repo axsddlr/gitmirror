@@ -102,7 +102,7 @@ func TestWebhookRoutesRepoRuleBeforeFirstSync(t *testing.T) {
 	f := newFixtureTmpl(t, secret, repoRuleTmpl)
 	s := f.server()
 	s.init()
-	if !s.route("src", &forge.Event{Kind: forge.EventPush, Owner: "carol", Name: "THING"}) {
+	if !s.route(f.app.Config(), "src", &forge.Event{Kind: forge.EventPush, Owner: "carol", Name: "THING"}) {
 		t.Fatal("route returned false for a repo: rule")
 	}
 	s.mu.Lock()
@@ -120,7 +120,7 @@ func TestWebhookRepoRuleNoMatchIgnored(t *testing.T) {
 	f := newFixtureTmpl(t, secret, repoRuleTmpl)
 	s := f.server()
 	s.init()
-	if s.route("src", &forge.Event{Kind: forge.EventPush, Owner: "carol", Name: "different"}) {
+	if s.route(f.app.Config(), "src", &forge.Event{Kind: forge.EventPush, Owner: "carol", Name: "different"}) {
 		t.Fatal("route matched an unrelated repo")
 	}
 }

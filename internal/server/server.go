@@ -82,6 +82,9 @@ type Server struct {
 
 	// onJobDone, when set (tests), is called after every job.
 	onJobDone func(lane string, j Job)
+	// onReschedule, when set (tests), is called by the scheduler with every
+	// rule's next run time after it applied a configuration change.
+	onReschedule func(next map[string]time.Time)
 
 	once    sync.Once
 	m       *metrics
@@ -139,7 +142,7 @@ func (s *Server) init() {
 		s.whWake = make(chan struct{}, 1)
 		s.busyLanes = map[string]bool{}
 		if s.App != nil {
-			for _, r := range s.App.Config.Rules {
+			for _, r := range s.App.Config().Rules {
 				s.m.ruleErrors.WithLabelValues(r.Name).Add(0)
 			}
 		}

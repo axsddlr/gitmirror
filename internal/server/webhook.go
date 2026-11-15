@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"gitmirror/internal/config"
 	"gitmirror/internal/forge"
 )
 
@@ -18,7 +19,9 @@ import (
 // details or parse errors; details go to the debug log (no secrets).
 func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("forge")
-	cfg := s.App.Config
+	// One configuration snapshot for the whole request.
+	snap := s.App.Snapshot()
+	cfg := snap.Config
 	_, known := cfg.Forges[name]
 	label := name
 	if !known {
@@ -41,7 +44,7 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		text(w, http.StatusNotFound, "not found")
 		return
 	}
-	wp, ok := s.App.Providers[name].(forge.WebhookProvider)
+	wp, ok := snap.Providers[name].(forge.WebhookProvider)
 	if !ok {
 		count(whIgnored)
 		text(w, http.StatusNotFound, "not found")
@@ -91,7 +94,7 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	if s.route(name, ev) {
+	if s.route(cfg, name, ev) {
 		count(whAccepted)
 		log.Info("server: webhook accepted", "kind", ev.Kind, "repo", ev.Owner+"/"+ev.Name)
 		text(w, http.StatusAccepted, "accepted")
@@ -107,13 +110,17 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 // (no reconcile). Otherwise every owner rule for that owner and every
 // starred_by rule on the forge gets a full scheduled-lane sync, which picks
 // up new repositories. A repo: rule naming the event's repo gets a targeted
-// webhook-lane sync even before any full sync has run.
-func (s *Server) route(forgeName string, ev *forge.Event) bool {
+// webhook-lane sync even before any full sync has run. Only rules of cfg
+// (the request's configuration snapshot) are considered.
+func (s *Server) route(cfg *config.Config, forgeName string, ev *forge.Event) bool {
 	full := ev.Owner + "/" + ev.Name
 	type target struct{ rule, repo string }
 	var targets []target
 	s.mu.Lock()
 	for rule, pairs := range s.lastResolve {
+		if cfg.RuleOrigin(rule) == "" {
+			continue // removed since its last resolve
+		}
 		for _, p := range pairs {
 			if p.SrcForge == forgeName && strings.EqualFold(p.Src.FullName(), full) {
 				targets = append(targets, target{rule, p.Src.FullName()})
@@ -130,7 +137,7 @@ func (s *Server) route(forgeName string, ev *forge.Event) bool {
 		return true
 	}
 	queued := false
-	for _, r := range s.App.Config.Rules {
+	for _, r := range cfg.Rules {
 		if r.From.Forge != forgeName {
 			continue
 		}

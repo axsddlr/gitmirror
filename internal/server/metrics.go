@@ -179,9 +179,9 @@ func (s *Server) refreshPairs(ctx context.Context) {
 }
 
 // refreshRates queries every forge's API quota (skipping forges that report
-// no limit).
+// no limit) of the current configuration.
 func (s *Server) refreshRates(ctx context.Context) {
-	for name, p := range s.App.Providers {
+	for name, p := range s.App.Providers() {
 		rctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		r, err := p.RateLimit(rctx)
 		cancel()
