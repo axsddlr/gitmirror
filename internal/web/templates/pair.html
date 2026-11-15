@@ -21,7 +21,7 @@
     <thead><tr><th scope="col">Part</th><th scope="col">Result</th><th scope="col">Details</th></tr></thead>
     <tbody>
     {{- range .Steps}}
-    <tr><td data-label="Part">{{.Label}}</td><td data-label="Result">{{template "status" .Status}}</td><td data-label="Details">{{.Detail}}</td></tr>
+    <tr><td data-label="Part">{{.Label}}</td><td data-label="Result">{{template "status" .Status}}</td><td data-label="Details">{{if .Plain}}{{.Plain}}<details><summary>Technical details</summary><pre>{{.Detail}}</pre></details>{{else}}{{.Detail}}{{end}}</td></tr>
     {{- end}}
     </tbody>
   </table>

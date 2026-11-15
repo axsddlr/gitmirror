@@ -14,8 +14,16 @@ import (
 	"gitmirror/internal/resolve"
 )
 
-// hookTimeout bounds one "Set up webhooks for me" run.
-const hookTimeout = 2 * time.Minute
+// hookTimeout bounds one "Set up webhooks for me" run. It stays well under
+// the web UI server's 60s write timeout so the result page is always sent;
+// whatever was not reached in time is reported as not done yet.
+var hookTimeout = 45 * time.Second
+
+// notDoneYet is the outcome of a webhook that hookTimeout cut off.
+const notDoneYet = "Not done yet — run Set up again."
+
+// stNotDone is the status of a webhook that hookTimeout cut off.
+var stNotDone = statusView{"warn", "…", "Not done yet", 3}
 
 // hookPermissionHint explains a 403 from a webhook API call.
 const hookPermissionHint = "The token is not allowed to manage webhooks here. On GitHub it needs the admin:repo_hook scope " +
@@ -206,6 +214,21 @@ func (u *UI) setupHooks(w http.ResponseWriter, r *http.Request) {
 	u.render(w, r, "webhook_setup", View{Title: "Webhooks for " + site, Section: "webhooks", Data: d})
 }
 
+// namedList reports whether the owner rule r copies only repositories it
+// names: every include pattern is a literal name.
+func namedList(r config.Rule) bool {
+	f := r.From.Filter
+	if f == nil || len(f.Include) == 0 {
+		return false
+	}
+	for _, p := range f.Include {
+		if _, ok := literalPattern(p); !ok {
+			return false
+		}
+	}
+	return true
+}
+
 func hasHook(hs []forge.Hook, url string) bool {
 	for _, h := range hs {
 		if strings.EqualFold(strings.TrimRight(h.URL, "/"), strings.TrimRight(url, "/")) {
@@ -230,27 +253,37 @@ func hookFailure(err error) (string, string) {
 
 // ensureHooks makes sure every source of rules on the site has a webhook
 // to url: one organisation webhook for an owner that is an organisation
-// (OrgHooks answers for it), one per repository otherwise.
+// (OrgHooks answers for it) and that a rule copies whole (not a list of
+// picked repositories), one per repository otherwise.
 func (u *UI) ensureHooks(ctx context.Context, snap *app.Snapshot, hp forge.HookProvider, rules []string, url, secret string) ([]hookResult, []string) {
 	cfg := snap.Config
 	res := resolve.Resolve(ctx, cfg, snap.Providers, rules...)
 	var problems []string
-	for _, e := range res.Errors {
-		problems = append(problems, e.Rule+": "+explain(e.Err.Error()).Text)
+	if ctx.Err() != nil {
+		problems = append(problems, "Not all repositories could be listed in time. "+notDoneYet)
+	} else {
+		for _, e := range res.Errors {
+			problems = append(problems, e.Rule+": "+explain(e.Err.Error()).Text)
+		}
 	}
 	opts := forge.HookOptions{URL: url, Secret: secret, Events: hp.HookEvents()}
 	var out []hookResult
 
-	// Owners of owner rules: is it an organisation?
+	// Owners of owner rules: is it an organisation? A pick list only gets
+	// webhooks on the repositories it names.
 	orgs := map[string]bool{} // lowercase org -> handled
 	var owners []string
 	for _, rl := range cfg.Rules {
-		if slices.Contains(rules, rl.Name) && rl.From.Owner != "" && !slices.Contains(owners, strings.ToLower(rl.From.Owner)) {
+		if slices.Contains(rules, rl.Name) && rl.From.Owner != "" && !namedList(rl) && !slices.Contains(owners, strings.ToLower(rl.From.Owner)) {
 			owners = append(owners, strings.ToLower(rl.From.Owner))
 		}
 	}
 	slices.Sort(owners)
 	for _, owner := range owners {
+		if ctx.Err() != nil {
+			out = append(out, hookResult{Target: owner, Status: stNotDone, Outcome: notDoneYet})
+			continue
+		}
 		hooks, err := hp.OrgHooks(ctx, owner)
 		if err != nil {
 			// Not an organisation (or not allowed to tell): hook each repository.
@@ -264,6 +297,9 @@ func (u *UI) ensureHooks(ctx context.Context, snap *app.Snapshot, hp forge.HookP
 		} else if _, err := hp.CreateOrgHook(ctx, owner, opts); err != nil {
 			hr.Status = stFailed
 			hr.Outcome, hr.Detail = hookFailure(err)
+			if ctx.Err() != nil {
+				hr.Status, hr.Outcome, hr.Detail = stNotDone, notDoneYet, ""
+			}
 		} else {
 			hr.Status, hr.Outcome = stOK, "Added: one webhook for every repository of the organisation, including new ones."
 			hr.Status.Label = "Added"
@@ -285,8 +321,15 @@ func (u *UI) ensureHooks(ctx context.Context, snap *app.Snapshot, hp forge.HookP
 	for _, full := range repos {
 		owner, name, _ := strings.Cut(full, "/")
 		hr := hookResult{Target: full}
+		if ctx.Err() != nil {
+			hr.Status, hr.Outcome = stNotDone, notDoneYet
+			out = append(out, hr)
+			continue
+		}
 		hooks, err := hp.RepoHooks(ctx, owner, name)
 		switch {
+		case err != nil && ctx.Err() != nil:
+			hr.Status, hr.Outcome = stNotDone, notDoneYet
 		case err != nil:
 			hr.Status = stFailed
 			hr.Outcome, hr.Detail = hookFailure(err)
@@ -297,6 +340,9 @@ func (u *UI) ensureHooks(ctx context.Context, snap *app.Snapshot, hp forge.HookP
 			if _, err := hp.CreateRepoHook(ctx, owner, name, opts); err != nil {
 				hr.Status = stFailed
 				hr.Outcome, hr.Detail = hookFailure(err)
+				if ctx.Err() != nil {
+					hr.Status, hr.Outcome, hr.Detail = stNotDone, notDoneYet, ""
+				}
 			} else {
 				hr.Status, hr.Outcome = stOK, "Added."
 				hr.Status.Label = "Added"

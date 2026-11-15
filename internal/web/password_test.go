@@ -94,12 +94,32 @@ func TestLimiter(t *testing.T) {
 		t.Fatal("other IP blocked")
 	}
 	l.succeed("2.2.2.2")
+	// release takes back an attempt without a verdict.
+	l2 := newLimiter(func() time.Time { return now })
+	for range maxFailuresPerIP * 2 {
+		if !l2.allow("3.3.3.3") {
+			t.Fatal("released attempts still counted")
+		}
+		l2.release("3.3.3.3")
+	}
+	if len(l2.global) != 0 || len(l2.ips) != 0 {
+		t.Fatalf("release left %d global, %d ips", len(l2.global), len(l2.ips))
+	}
 	now = now.Add(failureWindow + time.Second)
 	if !l.allow("1.1.1.1") {
 		t.Fatal("still blocked after the window")
 	}
 
-	// Global cap: many IPs, few failures each.
+	// Global cap: many IPs, few failures each. A success takes the
+	// IP's attempts out of the global count too.
+	l = newLimiter(func() time.Time { return now })
+	for range maxFailuresPerIP - 1 {
+		l.allow("4.4.4.4")
+	}
+	l.succeed("4.4.4.4")
+	if len(l.global) != 0 {
+		t.Fatalf("succeed left %d global attempts", len(l.global))
+	}
 	l = newLimiter(func() time.Time { return now })
 	for i := range maxFailuresGlobal {
 		ip := fmt.Sprintf("10.0.%d.%d", i/256, i%256)
@@ -119,6 +139,7 @@ func TestLimiter(t *testing.T) {
 	// Bounded size.
 	l = newLimiter(func() time.Time { return now })
 	for i := range maxTrackedIPs * 2 {
+		l.allow(fmt.Sprintf("ip-%d", i))
 		l.fail(fmt.Sprintf("ip-%d", i))
 		l.global = nil // keep the global cap out of the way
 	}

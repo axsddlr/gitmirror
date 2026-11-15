@@ -97,6 +97,12 @@ type Options struct {
 	// DryRun computes and reports the plan without writing to any forge or
 	// to the state store.
 	DryRun bool
+	// PlanOnly is a dry run of the prepare step only: it reads the source
+	// and destination from the forges and ownership from the state store,
+	// and reports what would be created, adopted or refused. It fetches no
+	// git data and takes neither the pair lock nor the cache lock, so it
+	// never waits for a running sync. It implies DryRun.
+	PlanOnly bool
 	// Trigger records what started the run: "cli", "schedule" or "webhook".
 	// Empty means "cli".
 	Trigger string
@@ -267,12 +273,16 @@ func (e *Engine) SyncPair(ctx context.Context, p resolve.Pair, opt Options) (rep
 		rep.Status, rep.Err = state.RunAborted, err
 		return rep
 	}
-	unlock, err := e.lock(ctx, key.String())
-	if err != nil {
-		rep.Status, rep.Err = state.RunAborted, err
-		return rep
+	if opt.PlanOnly {
+		opt.DryRun = true
+	} else {
+		unlock, err := e.lock(ctx, key.String())
+		if err != nil {
+			rep.Status, rep.Err = state.RunAborted, err
+			return rep
+		}
+		defer unlock()
 	}
-	defer unlock()
 
 	r := &pairRun{e: e, p: p, opt: opt, key: key, log: e.logger().With("pair", key.String())}
 	if !opt.DryRun {

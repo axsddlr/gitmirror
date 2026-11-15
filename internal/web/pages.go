@@ -87,6 +87,7 @@ func (u *UI) setupSubmit(w http.ResponseWriter, r *http.Request) {
 	u.setupMu.Lock()
 	defer u.setupMu.Unlock()
 	if u.hasAdmin.Load() {
+		u.setup.release(ip)
 		redirect(w, r, "/login")
 		return
 	}
@@ -100,6 +101,7 @@ func (u *UI) setupSubmit(w http.ResponseWriter, r *http.Request) {
 		u.render(w, r, "setup", v)
 		return
 	}
+	u.setup.succeed(ip)
 	if name, msg := checkPasswordRules(f.Get("password"), f.Get("confirm")); msg != "" {
 		f.SetError(name, msg)
 		v := setupView(f)
@@ -118,7 +120,6 @@ func (u *UI) setupSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 	u.hasAdmin.Store(true)
 	u.setupCode = ""
-	u.setup.succeed(ip)
 	u.log().Info("web UI: admin password created", "ip", ip)
 	if err := u.startSession(w, r); err != nil {
 		u.serverError(w, r, err)
@@ -163,6 +164,7 @@ func (u *UI) loginSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 	match, err := u.check(ctx, f.Get("password"))
 	if err != nil {
+		u.login.release(ip)
 		u.serverError(w, r, err)
 		return
 	}
@@ -221,6 +223,7 @@ func (u *UI) changePassword(w http.ResponseWriter, r *http.Request) {
 	}
 	match, err := u.check(ctx, f.Get("current"))
 	if err != nil {
+		u.login.release(ip)
 		u.serverError(w, r, err)
 		return
 	}
@@ -233,6 +236,7 @@ func (u *UI) changePassword(w http.ResponseWriter, r *http.Request) {
 		u.render(w, r, "settings", v)
 		return
 	}
+	u.login.succeed(ip)
 	if name, msg := checkPasswordRules(f.Get("password"), f.Get("confirm")); msg != "" {
 		f.SetError(name, msg)
 		v := settingsView(f)
@@ -253,7 +257,6 @@ func (u *UI) changePassword(w http.ResponseWriter, r *http.Request) {
 		u.serverError(w, r, err)
 		return
 	}
-	u.login.succeed(ip)
 	u.log().Info("web UI: admin password changed; other sessions signed out", "ip", ip)
 	u.setFlash(w, r, FlashSuccess, "Password changed. Any other browsers that were signed in have been signed out.")
 	redirect(w, r, "/settings")

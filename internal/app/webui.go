@@ -27,6 +27,13 @@ const (
 // checkTimeout bounds CheckForge.
 const checkTimeout = 30 * time.Second
 
+// previewTimeout bounds Preview, below the web UI's 60s write timeout.
+const previewTimeout = 45 * time.Second
+
+// PreviewLimit is the most pairs Preview plans; the rest are only counted
+// (len(Resolve.Pairs) - len(Reports)).
+const PreviewLimit = 200
+
 // CheckForge builds a provider for forge f (as it would be named name) and
 // asks it which account its token authenticates as, without saving
 // anything. Errors come from the provider and never contain the token.
@@ -52,9 +59,11 @@ func (a *App) CheckForge(ctx context.Context, name string, f config.Forge) (logi
 // Preview shows what saving a web UI change would do to one rule: it
 // applies fn to a copy of the UI set, merges and validates it exactly like
 // UpdateUI (errors match ErrConfig) and builds its providers, then resolves
-// the rule and dry-runs the engine on its pairs. Nothing is persisted and
-// the current snapshot stays; the engine's dry run writes neither to a
-// forge nor to the state store.
+// the rule and plans its pairs with the engine (engine.Options.PlanOnly).
+// Nothing is persisted and the current snapshot stays: the plan reads the
+// forges' APIs and the state store only, fetches no git data, leaves the
+// git cache alone and never waits for a running sync. It plans at most
+// PreviewLimit pairs (Reports) and is bounded by a 45s timeout.
 //
 // The rules sharing the rule's destination forge (and those that could
 // mirror back into its source) are resolved too, so a destination another
@@ -98,7 +107,10 @@ func (a *App) Preview(ctx context.Context, fn func(*UIConfig) error, rule string
 			res.Errors = append(res.Errors, e)
 		}
 	}
-	reports := a.Engine.Run(ctx, res.Pairs, engine.Options{DryRun: true, Trigger: "preview",
+	ctx, cancel := context.WithTimeout(ctx, previewTimeout)
+	defer cancel()
+	plan := res.Pairs[:min(len(res.Pairs), PreviewLimit)]
+	reports := a.Engine.Run(ctx, plan, engine.Options{DryRun: true, PlanOnly: true, Trigger: "preview",
 		Providers: provs, ForgeURLs: ForgeURLs(eff)})
 	return &SyncResult{Resolve: res, Reports: reports}, nil
 }

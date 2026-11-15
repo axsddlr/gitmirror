@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"gitmirror/internal/app"
 	"gitmirror/internal/config"
@@ -194,4 +195,68 @@ func TestSetUpWebhooksNeedsAddress(t *testing.T) {
 		t.Fatalf("unknown site = %d", r.code)
 	}
 	_ = app.SettingWebhookSecret
+}
+
+func TestSetUpWebhooksTimeBound(t *testing.T) {
+	old := hookTimeout
+	hookTimeout = 400 * time.Millisecond
+	t.Cleanup(func() { hookTimeout = old })
+	w := newWorld(t, "")
+	w.addSites()
+	for _, n := range []string{"one", "two", "three"} {
+		w.addRepo(w.gh.Provider, "alice", n)
+	}
+	w.putRule(config.Rule{Name: "user", From: config.Source{Forge: "github", Owner: "alice"}, To: config.Dest{Forge: "git-example-com", Owner: "carol"}})
+	if err := w.app.SetPublicAddress(context.Background(), "https://mirror.example.com"); err != nil {
+		t.Fatal(err)
+	}
+	c := w.admin()
+	w.gh.mu.Lock()
+	w.gh.hookDelay = 250 * time.Millisecond
+	w.gh.mu.Unlock()
+	start := time.Now()
+	r := c.postForm("/webhooks", "/webhooks/github/setup", nil)
+	if took := time.Since(start); took > 3*time.Second {
+		t.Fatalf("setup took %v", took)
+	}
+	if r.code != http.StatusOK {
+		t.Fatalf("setup = %d\n%.3000s", r.code, r.body)
+	}
+	mustContain(t, r, "alice/one", "Added", "alice/three", "Not done yet — run Set up again")
+	if n := len(w.gh.CreatedHooks()); n != 1 {
+		t.Fatalf("hooks created = %d, want 1", n)
+	}
+}
+
+func TestSetUpWebhooksPickListUsesRepoHooks(t *testing.T) {
+	w := newWorld(t, "")
+	w.addSites()
+	w.gh.AddOwner("acme", true)
+	w.gh.AddOwner("bigco", true)
+	for _, n := range []string{"a", "b", "c"} {
+		w.addRepo(w.gh.Provider, "acme", n)
+	}
+	w.addRepo(w.gh.Provider, "bigco", "x")
+	w.addRepo(w.gh.Provider, "bigco", "y")
+	yes := true
+	w.putRule(config.Rule{Name: "picked", From: config.Source{Forge: "github", Owner: "acme",
+		Filter: &config.Filter{Include: []string{"a", "b"}, Forks: &yes, Archived: &yes, Private: &yes}},
+		To: config.Dest{Forge: "git-example-com", Owner: "acme"}})
+	w.putRule(config.Rule{Name: "single", From: config.Source{Forge: "github", Repo: "bigco/x"},
+		To: config.Dest{Forge: "git-example-com", Repo: "carol/x"}})
+	if err := w.app.SetPublicAddress(context.Background(), "https://mirror.example.com"); err != nil {
+		t.Fatal(err)
+	}
+	c := w.admin()
+	r := c.postForm("/webhooks", "/webhooks/github/setup", nil)
+	if r.code != http.StatusOK {
+		t.Fatalf("setup = %d\n%.3000s", r.code, r.body)
+	}
+	scopes := map[string]bool{}
+	for _, h := range w.gh.CreatedHooks() {
+		scopes[h.Scope] = true
+	}
+	if len(scopes) != 3 || !scopes["acme/a"] || !scopes["acme/b"] || !scopes["bigco/x"] {
+		t.Fatalf("created scopes = %v, want only acme/a, acme/b and bigco/x", scopes)
+	}
 }

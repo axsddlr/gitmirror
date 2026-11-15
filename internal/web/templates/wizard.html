@@ -180,6 +180,7 @@
     {{- end}}
     </tbody>
   </table>
+  {{if .More}}<p class="muted">And {{.More}} more {{if eq .More 1}}repository{{else}}repositories{{end}}, not listed here.</p>{{end}}
   {{else}}
   <p>No repositories match right now, so nothing would be copied yet. Repositories that appear later are copied on the schedule.</p>
   {{end}}

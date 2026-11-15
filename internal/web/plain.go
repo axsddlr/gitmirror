@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -264,6 +265,81 @@ func stepLabel(step string) string {
 		return "Archive state"
 	}
 	return step
+}
+
+var (
+	refCountsRe     = regexp.MustCompile(`^(\d+) created, (\d+) updated, (\d+) deleted`)
+	releaseCountsRe = regexp.MustCompile(`^(\d+) created, (\d+) updated, (\d+) deleted releases; (\d+) assets uploaded \((\d+) replaced\), (\d+) assets deleted`)
+	upToDateRe      = regexp.MustCompile(`^\d+ refs up to date$`)
+	lfsCountRe      = regexp.MustCompile(`^(\d+) objects in cache$`)
+)
+
+// counted joins the non-zero counts as "2 releases added, 1 updated": the
+// first one carries the noun (one: singular, else plural). "" when all are
+// zero.
+func counted(one, plural string, counts []string, verbs ...string) string {
+	var parts []string
+	for i, c := range counts {
+		if c == "0" {
+			continue
+		}
+		if len(parts) == 0 {
+			noun := plural
+			if c == "1" {
+				noun = one
+			}
+			parts = append(parts, c+" "+noun+" "+verbs[i])
+		} else {
+			parts = append(parts, c+" "+verbs[i])
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+// stepDetail puts the detail the engine recorded for a step in plain
+// words; "" when there is no plain version (show the detail as it is).
+func stepDetail(step, detail string) string {
+	switch {
+	case detail == "":
+		return ""
+	case upToDateRe.MatchString(detail):
+		return "No changes"
+	case detail == "source is empty; nothing to push":
+		return "The original is empty, so there is nothing to copy"
+	case step == "prepare" && strings.HasPrefix(detail, "destination created"):
+		return "The copy was created"
+	case step == "prepare" && strings.HasPrefix(detail, "destination adopted"):
+		return "The repository that already existed is now kept up to date"
+	case step == "prepare" && strings.HasPrefix(detail, "destination exists"):
+		return "The copy is there"
+	}
+	if m := releaseCountsRe.FindStringSubmatch(detail); m != nil {
+		s := counted("release", "releases", m[1:4], "added", "updated", "removed")
+		if f := counted("file", "files", m[4:5], "uploaded"); f != "" {
+			s = strings.TrimPrefix(s+", "+f, ", ")
+		}
+		if s == "" {
+			return "No changes"
+		}
+		return s
+	}
+	if m := refCountsRe.FindStringSubmatch(detail); m != nil && (step == "git" || step == "wiki") {
+		s := counted("branch or tag", "branches or tags", m[1:4], "added", "updated", "removed")
+		switch {
+		case s == "":
+			return "No changes"
+		case step == "wiki":
+			return "The wiki was updated"
+		}
+		return s
+	}
+	if m := lfsCountRe.FindStringSubmatch(detail); m != nil {
+		if m[1] == "1" {
+			return "1 large file kept"
+		}
+		return m[1] + " large files kept"
+	}
+	return ""
 }
 
 // relTime says how long ago t was, relative to now.

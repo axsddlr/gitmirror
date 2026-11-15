@@ -37,6 +37,22 @@ type loginFailer struct {
 	*fake.Provider
 	mu  sync.Mutex
 	err error
+	// hookDelay slows down every RepoHooks call.
+	hookDelay time.Duration
+}
+
+func (l *loginFailer) RepoHooks(ctx context.Context, owner, repo string) ([]forge.Hook, error) {
+	l.mu.Lock()
+	d := l.hookDelay
+	l.mu.Unlock()
+	if d > 0 {
+		select {
+		case <-time.After(d):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return l.Provider.RepoHooks(ctx, owner, repo)
 }
 
 func (l *loginFailer) setErr(err error) {

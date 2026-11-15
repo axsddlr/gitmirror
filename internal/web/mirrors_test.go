@@ -243,7 +243,8 @@ func TestWizardValidationErrorsInPlainWords(t *testing.T) {
 	if r.code != http.StatusBadRequest {
 		t.Fatalf("self mirror = %d", r.code)
 	}
-	mustContain(t, r, "The original and the copy would be the same repository")
+	// Caused by step 3, so shown on step 3 next to the field.
+	mustContain(t, r, "The original and the copy would be the same repository", "Step 3 of 5: Copy to", `id="dstowner-error"`)
 	if strings.Contains(r.body, "rules[") {
 		t.Fatalf("technical message shown:\n%.3000s", r.body)
 	}
@@ -258,7 +259,7 @@ func TestWizardValidationErrorsInPlainWords(t *testing.T) {
 	if r.code != http.StatusBadRequest {
 		t.Fatalf("collision = %d", r.code)
 	}
-	mustContain(t, r, "Another mirror already copies into the same place")
+	mustContain(t, r, "Another mirror already copies into the same place", "Step 3 of 5: Copy to", `id="dstowner-error"`)
 	if w.app.Config().RuleOrigin("second") != "" {
 		t.Fatal("colliding mirror saved")
 	}
@@ -270,7 +271,7 @@ func TestWizardValidationErrorsInPlainWords(t *testing.T) {
 	if r.code != http.StatusBadRequest {
 		t.Fatalf("duplicate name = %d", r.code)
 	}
-	mustContain(t, r, "already used by another mirror")
+	mustContain(t, r, "already used by another mirror", "Step 4 of 5: Options")
 	bad := maps(dup)
 	bad.Set("name", "Not Valid")
 	r = c.postForm("/mirrors/new", "/mirrors/wizard", withGo(bad, "save"))

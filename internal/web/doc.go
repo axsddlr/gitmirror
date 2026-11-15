@@ -20,9 +20,16 @@
 //   - /sites (sites.go): forges. Adding or changing one tests the token
 //     (App.CheckForge) before saving; tokens are never rendered.
 //   - /mirrors (dashboard.go, wizard.go): rules, and the step-by-step
-//     mirror form that previews with App.Preview (a dry run) before Save.
+//     mirror form that previews with App.Preview before Save. The preview
+//     only plans (forge APIs and the state store, no git fetch, no cache
+//     lock), at most app.PreviewLimit repositories, within 45 seconds.
 //   - /webhooks (webhooks.go): public address and webhook secret (stored by
-//     the App when the config file has none) and "Set up webhooks for me".
+//     the App when the config file has none) and "Set up webhooks for me":
+//     one organisation webhook for a mirror that copies a whole
+//     organisation, one per repository otherwise (picked lists, single
+//     repositories, personal accounts). The run is bounded to 45 seconds,
+//     below the UI server's 60s write timeout; whatever was not reached is
+//     shown as "Not done yet — run Set up again".
 //   - Problems are put in plain words by explain (plain.go).
 //
 // Entries of the config file are read-only: their pages say so and every
@@ -50,7 +57,13 @@
 //     cookie "gitmirror_csrf" (double submit). Other signed-out POSTs are
 //     redirected to /login.
 //   - Sign-in, setup and password-change failures are rate limited per
-//     RemoteAddr IP (5 per 15 minutes) and globally (50 per 15 minutes).
+//     RemoteAddr IP (5 per 15 minutes) and globally (100 per 15 minutes).
+//     An attempt is reserved in the limiter before the password is checked
+//     and counts as a failure until it succeeds, so parallel requests get
+//     no more tries; a success clears that IP's failures. Tradeoff of the
+//     global cap: it stops guessing spread over many addresses, but about
+//     20 addresses failing 5 times each can lock everyone (the admin too)
+//     out for 15 minutes. One IP can never use more than its own 5.
 //   - Every response carries a strict Content-Security-Policy: no inline
 //     scripts or styles anywhere, no style="" attributes. Put CSS in
 //     static/app.css.

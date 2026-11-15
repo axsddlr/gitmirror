@@ -131,7 +131,7 @@ func (r *pairRun) writes() bool {
 }
 
 func (r *pairRun) run(ctx context.Context) {
-	if !r.prepare(ctx) {
+	if !r.prepare(ctx) || r.opt.PlanOnly {
 		return
 	}
 	ok := true

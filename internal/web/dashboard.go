@@ -172,8 +172,9 @@ type runView struct {
 }
 
 type stepView struct {
-	Label, Detail string
-	Status        statusView
+	// Plain is Detail in plain words; "" shows Detail as it is.
+	Label, Plain, Detail string
+	Status               statusView
 }
 
 type pairData struct {
@@ -230,7 +231,8 @@ func (u *UI) pairPage(w http.ResponseWriter, r *http.Request) {
 			rv.Problem = &p
 		}
 		for _, s := range run.Steps {
-			rv.Steps = append(rv.Steps, stepView{Label: stepLabel(s.Step), Detail: s.Detail, Status: stepStatus(s.Status)})
+			rv.Steps = append(rv.Steps, stepView{Label: stepLabel(s.Step), Plain: stepDetail(s.Step, s.Detail),
+				Detail: s.Detail, Status: stepStatus(s.Status)})
 		}
 		d.Runs = append(d.Runs, rv)
 	}

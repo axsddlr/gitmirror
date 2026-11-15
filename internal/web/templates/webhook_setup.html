@@ -2,7 +2,7 @@
 {{- $d := .Data}}
 <p><a href="/webhooks">← Webhooks</a></p>
 <h1>{{.Title}}</h1>
-<p>Payload URL: <code>{{$d.PayloadURL}}</code></p>
+<p>Address to send to (Payload URL): <code class="url">{{$d.PayloadURL}}</code></p>
 {{range $d.Problems}}<div class="problem"><p>{{.}}</p></div>{{end}}
 {{if $d.Results}}
 <table class="table">

@@ -301,15 +301,19 @@ func stepIndex(s string) int {
 }
 
 func suggestMirrorName(cfg *config.Config, w *wizard) string {
-	base := w.Account
-	if w.Mode == modePick && len(w.Picked) == 1 {
-		base = w.Picked[0]
+	base, suffix := w.Account, "-repos"
+	switch {
+	case w.Mode == modePick && len(w.Picked) == 1:
+		base, suffix = w.Picked[0], "-copy"
+	case w.Mode == modeStarred:
+		suffix = "-stars"
 	}
 	base = strings.Trim(nonName.ReplaceAllString(strings.ToLower(base), "-"), "-")
 	if base == "" {
 		base = "mirror"
+	} else {
+		base += suffix
 	}
-	base += "-to-" + w.Dst
 	if !config.ValidName(base) {
 		base = "mirror"
 	}
@@ -490,6 +494,8 @@ type previewRow struct {
 type previewView struct {
 	Rows     []previewRow
 	Problems []string
+	// More counts the repositories beyond app.PreviewLimit, not listed.
+	More int
 }
 
 type wizardView struct {
@@ -535,8 +541,8 @@ func (u *UI) renderWizardWith(w http.ResponseWriter, r *http.Request, f *Form, w
 			{modeStarred, "Everything starred by an account", "Copies the repositories the account has starred.", wz.Mode == modeStarred},
 		}
 		v.Namings = []choice{
-			{namingSame, "Keep the same names", "alice/tool is copied to <account>/tool.", wz.Naming == namingSame},
-			{namingPrefix, "Prefix with the original owner", "alice/tool is copied to <account>/alice-tool. Avoids clashes when copying from several owners.", wz.Naming == namingPrefix},
+			{namingSame, "Keep the same names", "For example, alice/tool is copied as tool.", wz.Naming == namingSame},
+			{namingPrefix, "Prefix with the original owner", "For example, alice/tool is copied as alice-tool. Avoids clashes when copying from several owners.", wz.Naming == namingPrefix},
 		}
 		if wz.Mode == modePick && len(wz.Picked) == 1 {
 			v.Namings = append(v.Namings, choice{namingCustom, "A name of my own", "Type the name below.", wz.Naming == namingCustom})
@@ -627,6 +633,11 @@ func (u *UI) enter(cfg *config.Config, wz *wizard, step string) {
 		}
 		wz.PickFor = wz.pickKey()
 	case stepTo:
+		if wz.Dst == "" && len(cfg.Forges) == 1 {
+			for n := range cfg.Forges {
+				wz.Dst = n
+			}
+		}
 		if wz.Naming == "" || wz.Naming == namingCustom && (wz.Mode != modePick || len(wz.Picked) != 1) {
 			wz.Naming = namingSame
 		}
@@ -779,6 +790,11 @@ func (u *UI) changeFailed(w http.ResponseWriter, r *http.Request, f *Form, wz *w
 		return
 	case errors.Is(err, app.ErrUnknownEntry):
 		f.Fail("The mirror you were changing no longer exists. It may have been deleted meanwhile.")
+	case errors.Is(err, app.ErrConfig) && destinationProblem(err):
+		// Caused by the choices of step 3: show it there, on the field.
+		f.SetError("dstowner", strings.Join(configProblems(err), " "))
+		u.renderWizard(w, r, f, wz, stepTo, http.StatusBadRequest)
+		return
 	case errors.Is(err, app.ErrConfig):
 		f.Fail(strings.Join(configProblems(err), " "))
 	default:
@@ -786,6 +802,24 @@ func (u *UI) changeFailed(w http.ResponseWriter, r *http.Request, f *Form, wz *w
 		return
 	}
 	u.renderWizard(w, r, f, wz, stepOptions, http.StatusBadRequest)
+}
+
+// destinationFrags mark validation errors about where the copies go (step
+// 3 of the wizard).
+var destinationFrags = []string{"source and destination are the same", "is already the destination of rule",
+	"is targeted by multiple sources", "mirror loop", "to.owner", "to.repo", "to.name", "destination for "}
+
+// destinationProblem reports whether every problem of the validation
+// error err is about the destination.
+func destinationProblem(err error) bool {
+	lines := splitErr(err)
+	for _, l := range lines {
+		l = strings.ToLower(l)
+		if !slices.ContainsFunc(destinationFrags, func(f string) bool { return strings.Contains(l, f) }) {
+			return false
+		}
+	}
+	return len(lines) > 0
 }
 
 func (u *UI) preview(w http.ResponseWriter, r *http.Request, f *Form, wz *wizard) {
@@ -810,20 +844,19 @@ func (u *UI) preview(w http.ResponseWriter, r *http.Request, f *Form, wz *wizard
 			row.Status, row.Outcome, row.Detail = stFailed, "Will not be copied. "+p.Text, p.Detail
 			row.Status.Label = "Conflict"
 		case strings.Contains(acts, "adopt existing repository"):
-			row.Status, row.Outcome = stPartial, "Will copy into the repository that already exists there; its content will be replaced to match the original."
+			row.Status, row.Outcome = stPartial, "The repository already exists there; its content will be replaced to match the original."
 			row.Status.Label = "Replaces existing"
 		case strings.Contains(acts, "create repository"):
-			row.Status, row.Outcome = stOK, "Will be created and filled with a full copy."
+			row.Status = stOK
 			row.Status.Label = "Will be created"
-		case acts != "":
-			row.Status, row.Outcome = stRunning, "Will be updated with the latest changes."
-			row.Status.Label, row.Status.Icon = "Will be updated", "↑"
 		default:
-			row.Status, row.Outcome = stOK, "Nothing to do."
-			row.Status.Label = "Already up to date"
+			// The preview fetches no code, so it cannot tell whether
+			// anything changed since the last copy.
+			row.Status, row.Outcome = stRunning, "Only what changed since the last copy is copied."
+			row.Status.Label, row.Status.Icon = "Will be updated", "↑"
 		}
 		if rep.Status == state.RunPartial && rep.Err != nil {
-			row.Outcome += " Some parts may fail: " + explain(rep.Err.Error()).Text
+			row.Outcome = strings.TrimSpace(row.Outcome + " Some parts may fail: " + explain(rep.Err.Error()).Text)
 			row.Detail = rep.Err.Error()
 		}
 		pv.Rows = append(pv.Rows, row)
@@ -831,12 +864,11 @@ func (u *UI) preview(w http.ResponseWriter, r *http.Request, f *Form, wz *wizard
 	for _, p := range res.Resolve.Dropped {
 		row := previewRow{Src: p.SrcForge + ": " + p.Src.FullName(), Dst: p.DstForge + ": " + p.DstFullName(), Status: stStopped}
 		row.Status.Label = "Will be skipped"
-		row.Outcome = "Will be skipped."
 		for i, e := range res.Resolve.Errors {
 			if strings.Contains(e.Err.Error(), p.Src.FullName()) {
 				used[i] = true
 				ex := explain(e.Err.Error())
-				row.Outcome, row.Detail = "Will be skipped. "+ex.Text, ex.Detail
+				row.Outcome, row.Detail = ex.Text, ex.Detail
 				break
 			}
 		}
@@ -847,6 +879,7 @@ func (u *UI) preview(w http.ResponseWriter, r *http.Request, f *Form, wz *wizard
 			pv.Problems = append(pv.Problems, explain(e.Err.Error()).Text)
 		}
 	}
+	pv.More = max(len(res.Resolve.Pairs)-len(res.Reports), 0)
 	u.renderWizardWith(w, r, f, wz, stepPreview, 0, pv)
 }
 

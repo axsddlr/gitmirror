@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"net/http"
 	"net/url"
+	"path"
 	"strings"
 	"time"
 
@@ -181,15 +182,29 @@ func (u *UI) requireAuth(h http.HandlerFunc) http.Handler {
 	})
 }
 
-// safeNext returns next if it is a local path, else "/".
+// safeNext returns next as a local path (cleaned path plus query) when it
+// is one, else "/". Backslashes and control characters (raw or
+// percent-encoded in the path) are refused: browsers read "/\host" as
+// "//host". The result is rebuilt from the parsed path, so it always
+// starts with a single "/".
 func safeNext(next string) string {
-	if !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") || strings.HasPrefix(next, "/\\") {
+	if !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") || unsafeChars(next) {
 		return "/"
 	}
-	if u, err := url.Parse(next); err != nil || u.Host != "" || u.Scheme != "" {
+	u, err := url.Parse(next)
+	if err != nil || u.Scheme != "" || u.Host != "" || u.User != nil || u.Opaque != "" || unsafeChars(u.Path) {
 		return "/"
 	}
-	return next
+	p := path.Clean(u.Path)
+	if !strings.HasPrefix(p, "/") || strings.HasPrefix(p, "//") {
+		return "/"
+	}
+	return (&url.URL{Path: p, RawQuery: u.RawQuery}).String()
+}
+
+// unsafeChars reports whether s has a backslash or a control character.
+func unsafeChars(s string) bool {
+	return strings.ContainsFunc(s, func(r rune) bool { return r == '\\' || r < 0x20 || r == 0x7f })
 }
 
 // checkCSRF rejects state-changing requests (anything but GET and HEAD)

@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -164,9 +165,9 @@ func isGitHubCom(addr string) bool {
 var nonName = regexp.MustCompile(`[^a-z0-9]+`)
 
 // suggestName derives a site name from its address ("github" for
-// github.com, "git-example-com" for https://git.example.com), made unique
-// against cfg.
-func suggestName(cfg *config.Config, typ, addr string) string {
+// github.com, "git-example-com" for https://git.example.com; the kind, like
+// "gitea", for an IP address), made unique against cfg.
+func suggestName(cfg *config.Config, kind, typ, addr string) string {
 	base := "github"
 	if addr != "" {
 		host := "site"
@@ -174,6 +175,9 @@ func suggestName(cfg *config.Config, typ, addr string) string {
 			host = strings.TrimPrefix(strings.ToLower(p.Hostname()), "www.")
 			if port := p.Port(); port != "" {
 				host += "-" + port
+			}
+			if net.ParseIP(p.Hostname()) != nil && kind != "" {
+				host = kind // numbers mean nothing to the reader
 			}
 		}
 		base = strings.Trim(nonName.ReplaceAllString(host, "-"), "-")
@@ -194,7 +198,8 @@ func suggestName(cfg *config.Config, typ, addr string) string {
 }
 
 // readSite validates the site form. old is the site being edited (its
-// token is kept when the token field is blank); name is "" when adding.
+// token is kept when the token field is blank and neither the kind nor the
+// address changed); name is "" when adding.
 func (u *UI) readSite(f *Form, name string, old *config.Forge) (string, config.Forge, bool) {
 	cfg := u.App.Config()
 	var fg config.Forge
@@ -215,17 +220,22 @@ func (u *UI) readSite(f *Form, name string, old *config.Forge) (string, config.F
 	fg.URL = addr
 	fg.Token = strings.TrimSpace(f.Get("token"))
 	if fg.Token == "" {
-		if old != nil {
-			fg.Token = old.Token
-		} else {
+		switch {
+		case old == nil:
 			f.SetError("token", "Paste the token you created on the site.")
+		case fg.Type != old.Type || fg.URL != old.URL:
+			// The old token is never sent to another address or kind of
+			// site: it could be a server run by someone else.
+			f.SetError("token", "Paste the token again when you change the address.")
+		default:
+			fg.Token = old.Token
 		}
 	}
 	if name == "" {
 		name = strings.TrimSpace(f.Get("name"))
 		switch {
 		case name == "":
-			name = suggestName(cfg, typ, addr)
+			name = suggestName(cfg, f.Get("kind"), typ, addr)
 		case !config.ValidName(name):
 			f.SetError("name", "Use only lowercase letters, digits, - and _, starting with a letter or digit, like work-github.")
 		case cfg.ForgeOrigin(name) == config.OriginFile:
