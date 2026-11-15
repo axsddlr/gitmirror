@@ -354,6 +354,16 @@ func (f *fixture) initialSync(s *Server) {
 	f.waitJobs(2)
 }
 
+// advanceDebounce waits until the webhook worker has armed its debounce
+// timer (one waiter beside the idle scheduler's), then moves the clock past
+// the window. Advancing before the timer is armed would push its deadline
+// past the advanced time, so it would never fire.
+func (f *fixture) advanceDebounce(s *Server) {
+	f.t.Helper()
+	waitFor(f.t, 10*time.Second, func() bool { return f.clock.Waiters() >= 2 }, "webhook debounce timer")
+	f.clock.Advance(s.Debounce)
+}
+
 func waitFor(t *testing.T, timeout time.Duration, cond func() bool, what string) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
