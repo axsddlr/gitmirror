@@ -155,6 +155,38 @@ type RepoDeleter interface {
 	DeleteRepo(ctx context.Context, owner, name string) error
 }
 
+// Hook is a webhook registered on a forge, as listed by HookProvider.
+type Hook struct {
+	ID          int64
+	URL         string
+	Events      []string
+	Active      bool
+	ContentType string
+}
+
+// HookOptions describes a webhook to create. The payload content type is
+// always JSON. The secret is never returned by the forge when listing.
+type HookOptions struct {
+	URL    string
+	Secret string
+	Events []string
+}
+
+// HookProvider manages webhooks on the forge (the opposite direction from
+// WebhookProvider, which receives them). Hooks can be set on one repository
+// or on an organisation; a user account has no account-wide hooks on either
+// GitHub or Gitea/Forgejo, so callers must hook each repository of a user.
+// Failures never include HookOptions.Secret in their text.
+type HookProvider interface {
+	RepoHooks(ctx context.Context, owner, repo string) ([]Hook, error)
+	CreateRepoHook(ctx context.Context, owner, repo string, o HookOptions) (Hook, error)
+	OrgHooks(ctx context.Context, org string) ([]Hook, error)
+	CreateOrgHook(ctx context.Context, org string, o HookOptions) (Hook, error)
+	// HookEvents lists the event names gitmirror needs on this forge, in the
+	// forge's own vocabulary; pass them as HookOptions.Events.
+	HookEvents() []string
+}
+
 // EventKind classifies a webhook delivery.
 type EventKind string
 
