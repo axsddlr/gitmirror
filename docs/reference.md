@@ -167,9 +167,11 @@ work too: `docker run --rm ... gitmirror plan`.
 
 ### Docker Compose
 
-[`deploy/docker-compose.yml`](../deploy/docker-compose.yml) runs gitmirror with a data volume, the
-web UI published on `127.0.0.1:8090`, `restart: unless-stopped`, a long `stop_grace_period` and a
-healthcheck. A config bind mount and Docker `secrets:` mapped to `token_file` are included as
+[`docker-compose.yml`](../docker-compose.yml) at the top of the repository builds the image from
+the source (`docker compose up -d --build`) and runs it with a data volume, the web UI published on
+`127.0.0.1:8090`, webhooks on `8080`, `restart: unless-stopped`, a long `stop_grace_period` and a
+healthcheck. The host ports can be changed with `GITMIRROR_UI_PORT` and `GITMIRROR_WEBHOOK_PORT`
+(environment or a `.env` file). A config bind mount and Docker `secrets:` mapped to `token_file` are included as
 commented "advanced" options. It also contains a commented Gitea service for local trials.
 
 ### systemd
