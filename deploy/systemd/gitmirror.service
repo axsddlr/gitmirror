@@ -26,7 +26,7 @@
 
 [Unit]
 Description=gitmirror: one-way repository mirroring daemon
-Documentation=https://github.com/OWNER/gitmirror
+Documentation=https://github.com/axsddlr/gitmirror
 After=network-online.target
 Wants=network-online.target
 

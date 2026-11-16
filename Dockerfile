@@ -1,14 +1,18 @@
 # syntax=docker/dockerfile:1
 
 # Base images are pinned by tag AND digest (the digest is the multi-arch index,
-# so TARGETARCH builds still work). Verified on Docker Hub 2026-11-13:
-#   golang:1.26.11-alpine3.24 -> sha256:f496f8c5...  (== golang:1.26.11-alpine)
-#   alpine:3.24               -> sha256:0f49f331...
+# so TARGETARCH builds still work). Verified on Docker Hub 2026-11-16 with
+# `docker buildx imagetools inspect <tag>` (MediaType must be an image INDEX,
+# not a single-platform manifest, or ARM images get an x86 base):
+#   golang:1.26.11-alpine3.24 -> sha256:ae52b5bc...
+#   alpine:3.24               -> sha256:f59abe65...
 # Update both together (Dependabot/Renovate can bump tag+digest).
-FROM --platform=$BUILDPLATFORM golang:1.26.11-alpine3.24@sha256:f496f8c537ed506626ee1a6913afb32c45068a48697163c088f604cc775a0c38 AS build
+FROM --platform=$BUILDPLATFORM golang:1.26.11-alpine3.24@sha256:ae52b5bc6ed045a9ed26ab03dc19327a802a9cc9aa8b27ed57f5c6b60579b0bb AS build
 
 ARG TARGETOS
 ARG TARGETARCH
+# "v7" for linux/arm/v7 (32-bit Raspberry Pi OS); empty for amd64 and arm64.
+ARG TARGETVARIANT
 ARG VERSION=dev
 ARG COMMIT=
 
@@ -18,12 +22,12 @@ RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY . .
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} GOARM=${TARGETVARIANT#v} \
     go build -trimpath \
       -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT}" \
       -o /out/gitmirror ./cmd/gitmirror
 
-FROM alpine:3.24@sha256:0f49f331d9212aff11b932863be4eb01cdf962969aa86dab7d1ee21ac6f5f52b
+FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf
 
 RUN apk add --no-cache git git-lfs ca-certificates tini \
  && addgroup -g 10001 -S gitmirror \
