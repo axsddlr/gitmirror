@@ -340,11 +340,10 @@ Run `serve` to keep the mirrors up to date.
 
 ### Docker Compose with token files
 
-[`deploy/docker-compose.yml`](../deploy/docker-compose.yml) has the config mount and Docker
-secrets commented out. To use them:
+[`docker-compose.yml`](../docker-compose.yml) has the config mount and Docker
+secrets commented out. To use them, in the repository folder:
 
 ```sh
-cd deploy
 # 1. Token files (readable by the container user, uid 10001):
 mkdir -p secrets
 printf '%s' 'ghp_...'        > secrets/github_token
@@ -357,12 +356,12 @@ chmod 0444 secrets/*
 #        gitea:  { type: gitea, url: "https://git.example.com", token_file: /run/secrets/gitea_token }
 #      server:
 #        webhook_secret_file: /run/secrets/webhook_secret
-cp ../config.yaml config.yaml
+cp config.example.yaml config.yaml    # then edit it
 # 3. In docker-compose.yml uncomment the config.yaml volume line, the service's
 #    `secrets:` list and the top-level `secrets:` block.
 # 4. Check, then start:
 docker compose run --rm gitmirror validate
-docker compose up -d
+docker compose up -d --build
 ```
 
 `state_dir` in the config is ignored in the container (`GITMIRROR_STATE_DIR=/data` wins).

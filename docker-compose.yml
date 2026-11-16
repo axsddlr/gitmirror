@@ -1,6 +1,6 @@
-# gitmirror with Docker Compose.
+# gitmirror with Docker Compose. Run these in this folder:
 #
-#   docker compose up -d
+#   docker compose up -d --build
 #   docker compose logs gitmirror      # shows the one-time web UI setup code
 #
 # Then open http://localhost:8090, enter the setup code, choose a password and
@@ -8,17 +8,25 @@
 # you set up is kept in the gitmirror-data volume (back it up; it holds
 # secret.key, which unlocks the saved tokens).
 #
-# The web UI is published on 127.0.0.1 of the host only. To use it from other
-# machines, put an HTTPS reverse proxy (Caddy, nginx, Traefik) in front of port
-# 8090 instead of publishing it on all interfaces, and set the "Public address"
-# on the Webhooks page (or server.external_url) to the proxy's https:// URL.
+# Ports on this computer. Change them when 8090 or 8080 is already taken, either
+# in a .env file next to this one or on the command line:
+#   GITMIRROR_UI_PORT=8090        web pages (only reachable from this computer)
+#   GITMIRROR_WEBHOOK_PORT=8080   webhooks, /healthz, /readyz
+# For example: GITMIRROR_WEBHOOK_PORT=8085 docker compose up -d --build
+#
+# To use the web pages from other machines, put an HTTPS reverse proxy (Caddy,
+# nginx, Traefik) in front of the web UI port instead of publishing it on all
+# interfaces, and set the "Public address" on the Webhooks page to the proxy's
+# https:// URL for the webhook port.
+#
+# Update to newer code: git pull, then docker compose up -d --build.
 #
 # Advanced: configure with a file. Uncomment the config.yaml mount and, if you
 # keep tokens in files, the secrets below:
 #   mkdir -p secrets && printf '%s' "<github token>" > secrets/github_token
 #   printf '%s' "<gitea token>"   > secrets/gitea_token
 #   printf '%s' "<webhook secret>" > secrets/webhook_secret
-#   cp ../config.example.yaml config.yaml    # edit: token_file entries (see below)
+#   cp config.example.yaml config.yaml    # edit: token_file entries (see below)
 #
 # In config.yaml refer to the secrets by path instead of embedding tokens:
 #   forges:
@@ -31,18 +39,18 @@
 # chown 10001 on the host. The image runs as non-root uid/gid 10001.
 services:
   gitmirror:
-    image: ghcr.io/OWNER/gitmirror:latest   # replace OWNER, or use `build: ..` to build locally
-    # build:
-    #   context: ..
-    #   args: { VERSION: dev }
+    build:
+      context: .
+      args: { VERSION: compose }
+    image: gitmirror:local
     restart: unless-stopped
     command: ["serve"]
     environment:
       GITMIRROR_STATE_DIR: /data     # also set in the image; overrides state_dir in config.yaml
       GITMIRROR_UI_LISTEN: ":8090"   # also set in the image; overrides server.ui_listen
     ports:
-      - "8080:8080"             # webhooks, /healthz, /readyz. Put a TLS reverse proxy in front.
-      - "127.0.0.1:8090:8090"   # web UI, reachable only from this machine (see above)
+      - "${GITMIRROR_WEBHOOK_PORT:-8080}:8080"         # webhooks. Put a TLS reverse proxy in front.
+      - "127.0.0.1:${GITMIRROR_UI_PORT:-8090}:8090"    # web UI, reachable only from this computer
       # Do NOT publish 9090: /metrics is unauthenticated. Set `server.metrics_listen: ":9090"`
       # in config.yaml and scrape it from another container on the same Docker network.
     volumes:
@@ -65,17 +73,20 @@ services:
       retries: 3
       start_period: 10s
 
-  # Optional: a throw-away Gitea to try gitmirror against (uncomment, then create a
-  # user + token at http://localhost:3000 and add it as a Gitea site at http://gitea:3000).
+  # Optional: a throw-away Gitea to try gitmirror against. Uncomment it and the
+  # gitea-data volume, run `docker compose up -d`, create a user and a token at
+  # http://localhost:3000, then add a Gitea site at http://gitea:3000 in gitmirror.
+  # For webhooks, set the Public address on gitmirror's Webhooks page to
+  # http://gitmirror:8080.
   # gitea:
-  #   image: gitea/gitea:1.24
+  #   image: gitea/gitea:28.3.0
   #   restart: unless-stopped
   #   environment:
   #     GITEA__security__INSTALL_LOCK: "true"
   #     GITEA__server__ROOT_URL: http://localhost:3000/
-  #     GITEA__webhook__ALLOWED_HOST_LIST: gitmirror   # let Gitea call the gitmirror webhook receiver
+  #     GITEA__webhook__ALLOWED_HOST_LIST: private   # let Gitea call gitmirror on the Docker network
   #   ports:
-  #     - "3000:3000"
+  #     - "127.0.0.1:3000:3000"
   #   volumes:
   #     - gitea-data:/data
 

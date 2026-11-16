@@ -103,16 +103,20 @@ Always start it from the same folder. Leave the window open; Ctrl+C stops it.
 
 ### If you use Docker Compose (recommended for servers)
 
+In the folder you downloaded gitmirror into:
+
 ```sh
-cd deploy
-# In docker-compose.yml: comment out the `image: ghcr.io/OWNER/...` line and
-# uncomment the `build:` block, so Compose uses the code you downloaded.
-docker compose up -d
+docker compose up -d --build
 docker compose logs gitmirror
 ```
 
-The compose file publishes the web pages on `127.0.0.1:8090`, so only this computer can open them.
-Everything you set up is kept in the `gitmirror-data` volume.
+Compose builds gitmirror from the code you downloaded. It publishes the web pages on
+`127.0.0.1:8090`, so only this computer can open them, and webhooks on port `8080`. If either port
+is already used on your computer, pick others, for example
+`GITMIRROR_UI_PORT=8091 GITMIRROR_WEBHOOK_PORT=8085 docker compose up -d --build`, or put those two
+lines in a `.env` file next to `docker-compose.yml`.
+Everything you set up is kept in the `gitmirror-data` volume. To update later: `git pull`, then
+`docker compose up -d --build` again.
 
 ### If you use plain Docker
 
