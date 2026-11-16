@@ -1,0 +1,61 @@
+{{define "content"}}
+{{- $d := .Data}}
+<h1>Webhooks</h1>
+<p class="lead">Webhooks make the copies update within seconds of a push, instead of waiting for the next scheduled copy. They are optional: without them everything is still copied on schedule.</p>
+
+<section class="card">
+  <h2>Public address</h2>
+  <p>The site sends webhooks to this address, so it must be reachable from the site. For GitHub that means from the internet. It must lead to gitmirror's webhook port (now <code>{{$d.Listen}}</code>), not to the port of these pages.</p>
+  {{if $d.AddressFromFile}}
+  <p><strong>{{$d.Address}}</strong> <span class="muted">— set in the config file (server.external_url); change it there.</span></p>
+  {{else}}
+  <form method="post" action="/webhooks/address">
+    {{template "csrf" .}}
+    {{template "formerror" .Form}}
+    {{template "field" (optional (field .Form "address" "Public address" "url" "off" "Like https://mirror.example.com. Leave empty to remove it."))}}
+    <div class="actions"><button class="btn btn-primary" type="submit">Save address</button></div>
+  </form>
+  {{end}}
+</section>
+
+<section class="card">
+  <h2>Webhook secret</h2>
+  <p>The secret proves that a webhook really comes from your site. Enter it in every webhook you set up by hand.</p>
+  {{if $d.SecretFromFile}}
+  <p><strong>The secret is set in the config file</strong> (server.webhook_secret). It is not shown here.</p>
+  {{else}}
+  <details class="reveal">
+    <summary>Show the secret</summary>
+    <p><code class="secret">{{$d.Secret}}</code></p>
+    <p class="muted">Keep it private, like a password.</p>
+  </details>
+  <p><a class="btn btn-danger-outline" href="/webhooks/secret/new">Create a new secret</a></p>
+  {{end}}
+</section>
+
+<h2>Sites that mirrors copy from</h2>
+{{range $d.Sites}}
+<section class="card">
+  <h3>{{.Name}} <span class="muted">({{.Kind}})</span></h3>
+  <p class="muted">Used by: {{range $i, $m := .Mirrors}}{{if $i}}, {{end}}{{$m}}{{end}}</p>
+  <dl class="facts">
+    <dt>Address to send to (Payload URL)</dt><dd>{{if .PayloadURL}}<code class="url">{{.PayloadURL}}</code>{{else}}<span class="muted">Add a public address first</span>{{end}}</dd>
+    <dt>Content type (choose JSON)</dt><dd><code>application/json</code></dd>
+    <dt>Secret</dt><dd>the webhook secret above</dd>
+    {{if .Events}}<dt>Events to turn on</dt><dd>{{range $i, $ev := .Events}}{{if $i}}, {{end}}<code>{{$ev}}</code>{{end}}</dd>{{end}}
+  </dl>
+  <form method="post" action="/webhooks/{{.Name}}/setup">
+    {{template "csrf" $}}
+    <button class="btn btn-primary" type="submit"{{if not .CanSetup}} disabled aria-describedby="why-{{.Name}}"{{end}}>Set up webhooks for me</button>
+    {{if .Why}}<p class="hint" id="why-{{.Name}}">{{.Why}}</p>{{end}}
+  </form>
+  <p class="hint">gitmirror adds one webhook per organisation when a mirror copies all of it, otherwise one per repository, and skips webhooks that already exist.{{if eq .Kind "GitHub"}} GitHub must be able to reach the public address over the internet.{{end}}</p>
+</section>
+{{else}}
+<section class="card empty">
+  <h2>No mirrors yet</h2>
+  <p>Webhooks are set up for the sites your mirrors copy from. Set up a mirror first.</p>
+  <p><a class="btn btn-primary" href="/mirrors/new">New mirror</a></p>
+</section>
+{{end}}
+{{end}}

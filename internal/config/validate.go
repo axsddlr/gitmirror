@@ -31,6 +31,8 @@ type RepoRef struct {
 // Safety checks (self-mirroring, duplicate destinations, mirror loops) only
 // apply to literal `repo:` destinations; templated destinations can only be
 // checked at runtime.
+//
+// A config without rules is valid (see ErrNoRules).
 func (c *Config) Validate() error {
 	var errs []error
 	add := func(format string, a ...any) { errs = append(errs, fmt.Errorf(format, a...)) }
@@ -44,6 +46,7 @@ func (c *Config) Validate() error {
 			add("server.metrics_listen: %q is not a host:port address or \"off\"", ml)
 		}
 	}
+	c.validateUIServer(add)
 
 	names := make([]string, 0, len(c.Forges))
 	for n := range c.Forges {
@@ -57,9 +60,6 @@ func (c *Config) Validate() error {
 	validateSettings("defaults", c.Defaults.Interval, c.Defaults.Include, c.Defaults.Visibility, c.Defaults.OnSourceDeleted, c.Defaults.DeletionGrace, true, add)
 	validateDeletionGuard("defaults", c.Defaults.MaxRefDeletions, c.Defaults.MaxRefDeletionsPercent, add)
 
-	if len(c.Rules) == 0 {
-		add("rules: at least one rule is required")
-	}
 	seen := map[string]int{}
 	for i, r := range c.Rules {
 		loc := fmt.Sprintf("rules[%d]", i)
@@ -345,4 +345,67 @@ func (d Dest) Render(srcOwner, srcName string) (owner, name string, err error) {
 		return "", "", fmt.Errorf("name: %w", err)
 	}
 	return owner, name, nil
+}
+
+// validateUIServer checks server.ui_listen (a host:port or "off" that does
+// not clash with listen or metrics_listen) and server.external_url.
+func (c *Config) validateUIServer(add func(string, ...any)) {
+	s := c.Server
+	if ul := s.UIListen; ul != "" && ul != "off" {
+		if _, _, err := net.SplitHostPort(ul); err != nil {
+			add("server.ui_listen: %q is not a host:port address or \"off\"", ul)
+		} else {
+			for _, o := range []struct{ key, addr string }{{"listen", s.Listen}, {"metrics_listen", s.MetricsListen}} {
+				if sameListenAddr(ul, o.addr) {
+					add("server.ui_listen: %q clashes with server.%s %q; use another port", ul, o.key, o.addr)
+				}
+			}
+		}
+	}
+	if eu := s.ExternalURL; eu != "" {
+		if err := ValidateExternalURL(eu); err != nil {
+			add("server.external_url: %v", err)
+		}
+	}
+}
+
+// ValidName reports whether s is a valid forge or rule name: lowercase
+// letters, digits, "-" and "_", starting with a letter or digit.
+func ValidName(s string) bool { return identRe.MatchString(s) }
+
+// ValidateExternalURL checks a server.external_url value (already trimmed
+// of spaces and trailing slashes): an absolute http(s) URL with a host and
+// no user info, query or fragment.
+func ValidateExternalURL(eu string) error {
+	u, err := url.Parse(eu)
+	switch {
+	case err != nil:
+		return fmt.Errorf("%q is not a valid URL", eu)
+	case u.Scheme != "http" && u.Scheme != "https":
+		return fmt.Errorf("%q must start with http:// or https://", eu)
+	case u.Host == "" || u.Hostname() == "":
+		return fmt.Errorf("%q has no host", eu)
+	case u.User != nil:
+		return fmt.Errorf("%q must not contain a user name or password", eu)
+	case u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.Contains(eu, "#"):
+		return fmt.Errorf("%q must not contain a query (?) or fragment (#)", eu)
+	}
+	return nil
+}
+
+// sameListenAddr reports whether two host:port listen addresses would bind
+// the same port: equal ports with equal hosts or a wildcard host on either
+// side. Port 0 (any free port) never clashes; "off" and invalid addresses
+// never match.
+func sameListenAddr(a, b string) bool {
+	ah, ap, err := net.SplitHostPort(a)
+	if err != nil {
+		return false
+	}
+	bh, bp, err := net.SplitHostPort(b)
+	if err != nil || ap != bp || ap == "0" {
+		return false
+	}
+	wild := func(h string) bool { return h == "" || h == "0.0.0.0" || h == "::" }
+	return wild(ah) || wild(bh) || strings.EqualFold(ah, bh)
 }

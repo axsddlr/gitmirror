@@ -495,9 +495,11 @@ func TestTopLevelValidation(t *testing.T) {
 		{"defaults interval 1m ok", doc("defaults: {interval: 1m}", okRule), ""},
 		{"defaults visibility", doc("defaults: {visibility: x}", okRule), "defaults: visibility"},
 		{"defaults on_source_deleted", doc("defaults: {on_source_deleted: x}", okRule), "defaults: on_source_deleted"},
-		{"no rules key", forgesBlock, "rules: at least one rule is required"},
-		{"empty rules", forgesBlock + "rules: []\n", "rules: at least one rule is required"},
-		{"empty doc", "", "rules: at least one rule is required"},
+		// Zero rules is valid (rules can be added in the web UI); sync and
+		// plan refuse to run without any.
+		{"no rules key", forgesBlock, ""},
+		{"empty rules", forgesBlock + "rules: []\n", ""},
+		{"empty doc", "", ""},
 		{"unknown top key", doc("bogus: 1", okRule), "bogus"},
 		{"unknown forge key", strings.Replace(doc("", okRule), "type: github,", "type: github, tokn: x,", 1), "tokn"},
 		{"unknown rule key", okRuleWith("    wat: 1\n"), "wat"},

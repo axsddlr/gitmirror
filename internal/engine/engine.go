@@ -97,6 +97,12 @@ type Options struct {
 	// DryRun computes and reports the plan without writing to any forge or
 	// to the state store.
 	DryRun bool
+	// PlanOnly is a dry run of the prepare step only: it reads the source
+	// and destination from the forges and ownership from the state store,
+	// and reports what would be created, adopted or refused. It fetches no
+	// git data and takes neither the pair lock nor the cache lock, so it
+	// never waits for a running sync. It implies DryRun.
+	PlanOnly bool
 	// Trigger records what started the run: "cli", "schedule" or "webhook".
 	// Empty means "cli".
 	Trigger string
@@ -104,6 +110,11 @@ type Options struct {
 	// MaxRefDeletions / MaxRefDeletionsPercent) for this run. The bypass is
 	// logged and recorded in the git step detail.
 	AllowPrune bool
+	// Providers and ForgeURLs, when non-nil, replace Engine.Providers and
+	// Engine.ForgeURLs for this call, so a caller whose configuration can
+	// change at runtime gives every run one consistent snapshot.
+	Providers map[string]forge.Provider
+	ForgeURLs map[string]string
 }
 
 func (o Options) trigger() string {
@@ -111,6 +122,24 @@ func (o Options) trigger() string {
 		return "cli"
 	}
 	return o.Trigger
+}
+
+// provider returns the provider of forge name for a call with opt.
+func (e *Engine) provider(opt Options, name string) (forge.Provider, bool) {
+	provs := e.Providers
+	if opt.Providers != nil {
+		provs = opt.Providers
+	}
+	p, ok := provs[name]
+	return p, ok
+}
+
+// forgeURL returns the normalised base URL of forge name for a call with opt.
+func (e *Engine) forgeURL(opt Options, name string) string {
+	if opt.ForgeURLs != nil {
+		return opt.ForgeURLs[name]
+	}
+	return e.ForgeURLs[name]
 }
 
 func (e *Engine) logger() *slog.Logger {
@@ -139,13 +168,13 @@ func (e *Engine) maxAssetSize() int64 {
 // (deleted and re-created, or restored from a backup) or a different forge
 // base URL (forges.<name>.url now points at another server). It returns ""
 // when they match; unknown values (0 / "") on either side are not compared.
-func (e *Engine) identityMismatch(rec state.OwnershipRecord, dstForge string, cur *forge.Repo) string {
+func (e *Engine) identityMismatch(rec state.OwnershipRecord, dstForge string, cur *forge.Repo, opt Options) string {
 	var why []string
 	if rec.RepoID != 0 && cur.ID != 0 && rec.RepoID != cur.ID {
 		why = append(why, fmt.Sprintf("its repository id is %d but gitmirror recorded %d, so it was replaced "+
 			"(deleted and re-created, or restored from a backup)", cur.ID, rec.RepoID))
 	}
-	if url := e.ForgeURLs[dstForge]; rec.ForgeURL != "" && url != "" && rec.ForgeURL != url {
+	if url := e.forgeURL(opt, dstForge); rec.ForgeURL != "" && url != "" && rec.ForgeURL != url {
 		why = append(why, fmt.Sprintf("the forge URL of %q changed from %s to %s", dstForge, rec.ForgeURL, url))
 	}
 	return strings.Join(why, "; ")
@@ -244,12 +273,16 @@ func (e *Engine) SyncPair(ctx context.Context, p resolve.Pair, opt Options) (rep
 		rep.Status, rep.Err = state.RunAborted, err
 		return rep
 	}
-	unlock, err := e.lock(ctx, key.String())
-	if err != nil {
-		rep.Status, rep.Err = state.RunAborted, err
-		return rep
+	if opt.PlanOnly {
+		opt.DryRun = true
+	} else {
+		unlock, err := e.lock(ctx, key.String())
+		if err != nil {
+			rep.Status, rep.Err = state.RunAborted, err
+			return rep
+		}
+		defer unlock()
 	}
-	defer unlock()
 
 	r := &pairRun{e: e, p: p, opt: opt, key: key, log: e.logger().With("pair", key.String())}
 	if !opt.DryRun {

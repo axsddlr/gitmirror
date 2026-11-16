@@ -131,7 +131,7 @@ func (r *pairRun) writes() bool {
 }
 
 func (r *pairRun) run(ctx context.Context) {
-	if !r.prepare(ctx) {
+	if !r.prepare(ctx) || r.opt.PlanOnly {
 		return
 	}
 	ok := true
@@ -199,10 +199,10 @@ func (r *pairRun) prepare(ctx context.Context) bool {
 	}
 	p := r.p
 	var ok bool
-	if r.srcP, ok = r.e.Providers[p.SrcForge]; !ok {
+	if r.srcP, ok = r.e.provider(r.opt, p.SrcForge); !ok {
 		return fail(fmt.Errorf("unknown source forge %q", p.SrcForge))
 	}
-	if r.dstP, ok = r.e.Providers[p.DstForge]; !ok {
+	if r.dstP, ok = r.e.provider(r.opt, p.DstForge); !ok {
 		return fail(fmt.Errorf("unknown destination forge %q", p.DstForge))
 	}
 	src, err := r.srcP.GetRepo(ctx, p.Src.Owner, p.Src.Name)
@@ -235,7 +235,7 @@ func (r *pairRun) prepare(ctx context.Context) bool {
 		return fail(fmt.Errorf("read pair state: %w", err))
 	}
 	r.markerSet = prev.Unarchived
-	forgeURL := r.e.ForgeURLs[p.DstForge]
+	forgeURL := r.e.forgeURL(r.opt, p.DstForge)
 
 	var detail string
 	dst, err := r.dstP.GetRepo(ctx, p.DstOwner, p.DstName)
@@ -281,7 +281,7 @@ func (r *pairRun) prepare(ctx context.Context) bool {
 		}
 		mismatch := ""
 		if owned {
-			mismatch = r.e.identityMismatch(rec, p.DstForge, dst)
+			mismatch = r.e.identityMismatch(rec, p.DstForge, dst, r.opt)
 		}
 		switch {
 		case (!owned || mismatch != "") && !p.Settings.Adopt:

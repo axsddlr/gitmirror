@@ -137,10 +137,10 @@ func srcKey(rule, owner, name, dstOwner string) state.PairKey {
 func TestBuildWithProviderOverride(t *testing.T) {
 	f := newFixture(t)
 	a := f.build()
-	if a.Providers["src"] != forge.Provider(f.src) || a.Providers["dst"] != forge.Provider(f.dst) {
-		t.Fatalf("providers not the override: %v", a.Providers)
+	if a.Providers()["src"] != forge.Provider(f.src) || a.Providers()["dst"] != forge.Provider(f.dst) {
+		t.Fatalf("providers not the override: %v", a.Providers())
 	}
-	if a.Store == nil || a.Engine == nil || a.Logger == nil || a.Config == nil {
+	if a.Store == nil || a.Engine == nil || a.Logger == nil || a.Config() == nil {
 		t.Fatalf("incomplete App: %+v", a)
 	}
 	if _, err := os.Stat(filepath.Join(f.stateDir, "state.db")); err != nil {
@@ -176,8 +176,8 @@ rules:
 		t.Fatal(err)
 	}
 	defer a.Close()
-	if a.Providers["gh"].Type() != "github" || a.Providers["home"].Type() != "gitea" {
-		t.Fatalf("providers = %v", a.Providers)
+	if a.Providers()["gh"].Type() != "github" || a.Providers()["home"].Type() != "gitea" {
+		t.Fatalf("providers = %v", a.Providers())
 	}
 }
 

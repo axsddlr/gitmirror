@@ -34,18 +34,25 @@ RUN apk add --no-cache git git-lfs ca-certificates tini \
 COPY --from=build /out/gitmirror /usr/local/bin/gitmirror
 
 # HOME=/data: git and git-lfs write their config/cache under $HOME.
-# The config file is expected at /config/config.yaml (mount it read-only).
-# GITMIRROR_STATE_DIR overrides state_dir (the default ./data would be /data/data).
+# The working directory is /config, so the default config file is
+# /config/config.yaml. It is optional: mount one read-only for advanced
+# settings, or leave it out and set everything up in the web UI.
+# (GITMIRROR_CONFIG is deliberately not set: a path given that way must exist.)
+# GITMIRROR_STATE_DIR overrides state_dir (the default ./data would be /config/data).
+# GITMIRROR_UI_LISTEN overrides server.ui_listen so the web UI is reachable
+# through a published port (the default 127.0.0.1:8090 is container-only).
 ENV HOME=/data \
-    GITMIRROR_CONFIG=/config/config.yaml \
-    GITMIRROR_STATE_DIR=/data
+    GITMIRROR_STATE_DIR=/data \
+    GITMIRROR_UI_LISTEN=:8090
 
 USER gitmirror:gitmirror
-WORKDIR /data
+WORKDIR /config
 VOLUME /data
 # /metrics is on server.metrics_listen (default 127.0.0.1:9090, unreachable from outside the
 # container); set it to ":9090" for scraping and do not publish that port.
-EXPOSE 8080
+# 8080: webhooks, /healthz, /readyz. 8090: the web UI (publish it on 127.0.0.1
+# of the host, or behind an HTTPS reverse proxy).
+EXPOSE 8080 8090
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD wget -qO- http://127.0.0.1:8080/healthz || exit 1

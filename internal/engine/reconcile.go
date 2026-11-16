@@ -105,7 +105,7 @@ func (e *Engine) Reconcile(ctx context.Context, current []resolve.Pair, complete
 			}
 			continue
 		}
-		srcP, ok := e.Providers[k.SrcForge]
+		srcP, ok := e.provider(opt, k.SrcForge)
 		if !ok {
 			log.Warn("engine: reconcile: unknown source forge", "pair", k.String(), "forge", k.SrcForge)
 			continue
@@ -218,7 +218,7 @@ func (e *Engine) reconcileOne(ctx context.Context, k state.PairKey, srcP forge.P
 		return noRun(state.StepSkipped, "source missing; within deletion grace until "+until.UTC().Format(time.RFC3339))
 	}
 
-	plan, perr := e.safePlanDeletion(ctx, k, rs, log)
+	plan, perr := e.safePlanDeletion(ctx, k, rs, opt, log)
 	if perr == nil {
 		switch plan.kind {
 		case planKeep:
@@ -343,24 +343,24 @@ type deletionPlan struct {
 }
 
 // safePlanDeletion is planDeletion with a panic turned into an error.
-func (e *Engine) safePlanDeletion(ctx context.Context, k state.PairKey, rs config.RuleSettings, log *slog.Logger) (plan deletionPlan, err error) {
+func (e *Engine) safePlanDeletion(ctx context.Context, k state.PairKey, rs config.RuleSettings, opt Options, log *slog.Logger) (plan deletionPlan, err error) {
 	defer func() {
 		if v := recover(); v != nil {
 			log.Error("engine: panic during reconcile", "panic", v, "stack", string(debug.Stack()))
 			plan, err = deletionPlan{}, fmt.Errorf("engine: panic: %v", v)
 		}
 	}()
-	return e.planDeletion(ctx, k, rs)
+	return e.planDeletion(ctx, k, rs, opt)
 }
 
 // planDeletion decides what the pair's OnSourceDeleted policy would do,
 // reading (never writing) the destination and the ownership record.
-func (e *Engine) planDeletion(ctx context.Context, k state.PairKey, rs config.RuleSettings) (deletionPlan, error) {
+func (e *Engine) planDeletion(ctx context.Context, k state.PairKey, rs config.RuleSettings, opt Options) (deletionPlan, error) {
 	dst := k.DstForge + ":" + k.DstRepo
 	if rs.OnSourceDeleted != "archive" && rs.OnSourceDeleted != "delete" {
 		return deletionPlan{kind: planKeep}, nil
 	}
-	dstP, ok := e.Providers[k.DstForge]
+	dstP, ok := e.provider(opt, k.DstForge)
 	if !ok {
 		return deletionPlan{}, fmt.Errorf("unknown destination forge %q", k.DstForge)
 	}
@@ -381,7 +381,7 @@ func (e *Engine) planDeletion(ctx context.Context, k state.PairKey, rs config.Ru
 		return deletionPlan{}, fmt.Errorf("get %s: %w", dst, err)
 	}
 	if !gone {
-		if why := e.identityMismatch(rec, k.DstForge, repo); why != "" {
+		if why := e.identityMismatch(rec, k.DstForge, repo, opt); why != "" {
 			// Not the repository gitmirror created or adopted: never
 			// archive or delete it.
 			plan.kind, plan.note = planNotOwned, why

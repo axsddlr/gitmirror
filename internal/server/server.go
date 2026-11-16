@@ -79,9 +79,16 @@ type Server struct {
 	// Retry-After: 1. 0 means 8.
 	MaxConcurrentWebhooks int
 	MetricsListener       net.Listener
+	// UIListener, when set, serves UIHandler (the web UI) on its own
+	// listener; Run starts and gracefully shuts it down with the others.
+	UIListener net.Listener
+	UIHandler  http.Handler
 
 	// onJobDone, when set (tests), is called after every job.
 	onJobDone func(lane string, j Job)
+	// onReschedule, when set (tests), is called by the scheduler with every
+	// rule's next run time after it applied a configuration change.
+	onReschedule func(next map[string]time.Time)
 
 	once    sync.Once
 	m       *metrics
@@ -139,7 +146,7 @@ func (s *Server) init() {
 		s.whWake = make(chan struct{}, 1)
 		s.busyLanes = map[string]bool{}
 		if s.App != nil {
-			for _, r := range s.App.Config.Rules {
+			for _, r := range s.App.Config().Rules {
 				s.m.ruleErrors.WithLabelValues(r.Name).Add(0)
 			}
 		}
@@ -205,6 +212,9 @@ func (s *Server) Addr() net.Addr {
 // for them. It returns nil on a clean shutdown. Run must be called once.
 func (s *Server) Run(ctx context.Context, ln net.Listener) error {
 	s.init()
+	if s.UIListener != nil && s.UIHandler == nil {
+		return errors.New("server: UIListener is set without UIHandler")
+	}
 	addr := ln.Addr()
 	s.addr.Store(&addr)
 	hs := &http.Server{
@@ -233,6 +243,21 @@ func (s *Server) Run(ctx context.Context, ln net.Listener) error {
 		go func() { metricsErr <- ms.Serve(s.MetricsListener) }()
 		s.log().Info("server: metrics listening", "addr", s.MetricsListener.Addr().String())
 	}
+	var us *http.Server
+	uiErr := make(chan error, 1)
+	if s.UIListener != nil {
+		us = &http.Server{
+			Handler:           s.UIHandler,
+			ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout:       60 * time.Second,
+			WriteTimeout:      60 * time.Second,
+			IdleTimeout:       120 * time.Second,
+			MaxHeaderBytes:    1 << 20,
+			ErrorLog:          slog.NewLogLogger(s.log().Handler(), slog.LevelWarn),
+		}
+		go func() { uiErr <- us.Serve(s.UIListener) }()
+		s.log().Info("server: web UI listening", "addr", s.UIListener.Addr().String())
+	}
 
 	// Jobs outlive ctx: they are cancelled only after ShutdownTimeout.
 	jobCtx, cancelJobs := context.WithCancel(context.WithoutCancel(ctx))
@@ -255,6 +280,9 @@ func (s *Server) Run(ctx context.Context, ln net.Listener) error {
 	case err := <-metricsErr:
 		runErr = fmt.Errorf("server: metrics: %w", err)
 		metricsErr <- nil
+	case err := <-uiErr:
+		runErr = fmt.Errorf("server: web UI: %w", err)
+		uiErr <- nil
 	}
 
 	s.log().Info("server: shutting down")
@@ -275,6 +303,15 @@ func (s *Server) Run(ctx context.Context, ln net.Listener) error {
 		}
 		if err := <-metricsErr; err != nil && !errors.Is(err, http.ErrServerClosed) && runErr == nil {
 			runErr = fmt.Errorf("server: metrics: %w", err)
+		}
+	}
+	if us != nil {
+		if err := us.Shutdown(shCtx); err != nil {
+			s.log().Warn("server: web UI shutdown", "err", err)
+			us.Close()
+		}
+		if err := <-uiErr; err != nil && !errors.Is(err, http.ErrServerClosed) && runErr == nil {
+			runErr = fmt.Errorf("server: web UI: %w", err)
 		}
 	}
 	cancel()

@@ -14,6 +14,8 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"gitmirror/internal/config"
@@ -24,6 +26,7 @@ import (
 	"gitmirror/internal/forge/httpx"
 	"gitmirror/internal/gitx"
 	"gitmirror/internal/resolve"
+	"gitmirror/internal/secretbox"
 	"gitmirror/internal/state"
 )
 
@@ -49,15 +52,30 @@ type Options struct {
 	// another process: 0 fails immediately, >0 retries every 250ms until it
 	// elapses or ctx is done. Ignored when ReadOnly.
 	LockTimeout time.Duration
+	// Redact, when set, is called with every forge token of each effective
+	// configuration before it is used (at Build and after every UpdateUI),
+	// so the caller can mask them in its output.
+	Redact func(secrets ...string)
 }
 
 // App is a fully wired gitmirror instance.
+//
+// The effective configuration (config file plus the forges and rules
+// managed in the web UI) and the providers built from it form a Snapshot
+// that UpdateUI can replace at runtime; read it through Snapshot, Config or
+// Providers rather than caching it.
 type App struct {
-	Config    *config.Config
-	Providers map[string]forge.Provider
-	Store     *state.Store
-	Engine    *engine.Engine
-	Logger    *slog.Logger
+	Store  *state.Store
+	Engine *engine.Engine
+	Logger *slog.Logger
+
+	file     *config.Config
+	opts     Options
+	readOnly bool
+	snap     atomic.Pointer[Snapshot]
+	updMu    sync.Mutex // serialises UpdateUI (and UI reads against it)
+	boxMu    sync.Mutex
+	box      *secretbox.Box // lazily loaded; nil until a UI token is opened or sealed
 
 	lock *dirLock // nil when ReadOnly or after Close
 }
@@ -130,20 +148,23 @@ func ForgeURLs(cfg *config.Config) map[string]string {
 	return out
 }
 
-// Build wires everything up. The caller must Close the App.
+// Build wires everything up from the config file cfg (as returned by
+// config.Load or config.Parse). The caller must Close the App.
 //
 // Unless o.ReadOnly, Build first takes an exclusive OS-level lock on
 // <StateDir>/gitmirror.lock (held until Close) and then marks runs left
 // "running" by a dead process as aborted. A held lock yields an error
 // wrapping ErrLocked.
+//
+// Build then loads the forges and rules managed in the web UI from the
+// state store, opens their tokens with <StateDir>/secret.key, merges them
+// with cfg (config.Merge) and builds the providers of the effective config.
+// A UI forge whose token cannot be decrypted is an error naming the forge.
+// Build never creates the key file; UpdateUI does when it first seals a token.
 func Build(ctx context.Context, cfg *config.Config, o Options) (*App, error) {
 	log := o.Logger
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
-	}
-	provs, err := BuildProviders(cfg, o)
-	if err != nil {
-		return nil, err
 	}
 	git := &gitx.Runner{Env: o.GitEnv, UseHostConfig: cfg.Git.UseHostConfig}
 	v, err := git.Check(ctx)
@@ -151,14 +172,6 @@ func Build(ctx context.Context, cfg *config.Config, o Options) (*App, error) {
 		return nil, err
 	}
 	log.Debug("tools", "git", v.Git, "git-lfs", v.LFS)
-	if v.LFS == "" {
-		for _, r := range cfg.Rules {
-			if r.Effective(cfg.Defaults).Includes(config.FeatureLFS) {
-				log.Warn("git-lfs is not installed; LFS objects will not be mirrored", "rule", r.Name)
-				break
-			}
-		}
-	}
 	var lk *dirLock
 	if !o.ReadOnly {
 		if lk, err = acquireLock(ctx, cfg.StateDir, o.LockTimeout); err != nil {
@@ -170,33 +183,53 @@ func Build(ctx context.Context, cfg *config.Config, o Options) (*App, error) {
 		_ = lk.release() // best effort: the error above is what gets reported
 		return nil, err
 	}
+	fail := func(err error) (*App, error) {
+		st.Close()
+		_ = lk.release() // best effort: the error above is what gets reported
+		return nil, err
+	}
 	if !o.ReadOnly {
 		n, err := st.AbandonRunning(ctx)
 		if err != nil {
-			st.Close()
-			_ = lk.release() // best effort: the error above is what gets reported
-			return nil, fmt.Errorf("abandon interrupted runs: %w", err)
+			return fail(fmt.Errorf("abandon interrupted runs: %w", err))
 		}
 		if n > 0 {
 			log.Warn("marked interrupted runs as aborted", "count", n)
 		}
 	}
-	return &App{
-		lock:      lk,
-		Config:    cfg,
-		Providers: provs,
-		Store:     st,
-		Logger:    log,
+	a := &App{
+		lock:     lk,
+		Store:    st,
+		Logger:   log,
+		file:     cfg,
+		opts:     o,
+		readOnly: o.ReadOnly,
 		Engine: &engine.Engine{
-			Providers:   provs,
 			Store:       st,
 			Git:         git,
 			CacheDir:    filepath.Join(cfg.StateDir, "cache"),
 			Logger:      log,
 			Concurrency: cfg.Concurrency,
-			ForgeURLs:   ForgeURLs(cfg),
 		},
-	}, nil
+	}
+	ui, err := a.loadUI(ctx)
+	if err != nil {
+		return fail(err)
+	}
+	eff, provs, err := a.effective(ui)
+	if err != nil {
+		return fail(err)
+	}
+	a.install(eff, provs)
+	if v.LFS == "" {
+		for _, r := range eff.Rules {
+			if r.Effective(eff.Defaults).Includes(config.FeatureLFS) {
+				log.Warn("git-lfs is not installed; LFS objects will not be mirrored", "rule", r.Name)
+				break
+			}
+		}
+	}
+	return a, nil
 }
 
 // Close releases the state store and then the state dir lock.
@@ -228,14 +261,23 @@ type SyncRequest struct {
 	AllowPrune bool
 }
 
-// SyncWith is Sync with every option, including AllowPrune.
+// SyncWith is Sync with every option, including AllowPrune. The whole run
+// (resolve, sync and reconcile) uses the snapshot current when it starts.
+// With no rules configured it returns config.ErrNoRules.
 func (a *App) SyncWith(ctx context.Context, req SyncRequest) (*SyncResult, error) {
+	// One snapshot for the whole run: a concurrent UpdateUI affects only
+	// later runs.
+	snap := a.Snapshot()
+	cfg := snap.Config
+	if len(cfg.Rules) == 0 {
+		return nil, config.ErrNoRules
+	}
 	rules, repos := req.Rules, req.Repos
 	known := map[string]bool{}
 	settings := map[string]config.RuleSettings{}
-	for _, r := range a.Config.Rules {
+	for _, r := range cfg.Rules {
 		known[r.Name] = true
-		settings[r.Name] = r.Effective(a.Config.Defaults)
+		settings[r.Name] = r.Effective(cfg.Defaults)
 	}
 	var unknownRules []string
 	for _, r := range rules {
@@ -247,7 +289,7 @@ func (a *App) SyncWith(ctx context.Context, req SyncRequest) (*SyncResult, error
 		return nil, fmt.Errorf("%w: unknown rule(s): %s", ErrNoMatch, strings.Join(unknownRules, ", "))
 	}
 
-	res := resolve.Resolve(ctx, a.Config, a.Providers, rules...)
+	res := resolve.Resolve(ctx, cfg, snap.Providers, rules...)
 	pairs := res.Pairs
 	if len(repos) > 0 {
 		matched := map[string]bool{}
@@ -274,7 +316,8 @@ func (a *App) SyncWith(ctx context.Context, req SyncRequest) (*SyncResult, error
 		pairs = kept
 	}
 
-	opt := engine.Options{DryRun: req.DryRun, Trigger: req.Trigger, AllowPrune: req.AllowPrune}
+	opt := engine.Options{DryRun: req.DryRun, Trigger: req.Trigger, AllowPrune: req.AllowPrune,
+		Providers: snap.Providers, ForgeURLs: snap.ForgeURLs}
 	if req.AllowPrune && a.Logger != nil {
 		a.Logger.Warn("mass ref deletion guard disabled for this run (--allow-prune)")
 	}

@@ -58,11 +58,17 @@ func (e *testEnv) withServer(listen, secret string) {
 // withServerMetrics is withServer with an explicit server.metrics_listen.
 func (e *testEnv) withServerMetrics(listen, secret, metrics string) {
 	e.t.Helper()
+	e.withServerUI(listen, secret, metrics, "off")
+}
+
+// withServerUI is withServerMetrics with an explicit server.ui_listen.
+func (e *testEnv) withServerUI(listen, secret, metrics, ui string) {
+	e.t.Helper()
 	b, err := os.ReadFile(e.cfgPath)
 	if err != nil {
 		e.t.Fatal(err)
 	}
-	s := string(b) + "server:\n  listen: '" + listen + "'\n  metrics_listen: '" + metrics + "'\n"
+	s := string(b) + "server:\n  listen: '" + listen + "'\n  metrics_listen: '" + metrics + "'\n  ui_listen: '" + ui + "'\n"
 	if secret != "" {
 		s += "  webhook_secret: '" + secret + "'\n"
 	}
@@ -242,5 +248,77 @@ func TestServeMetricsOnSeparateListener(t *testing.T) {
 		wantCode(t, c, 0, so.String(), se.String())
 	case <-time.After(60 * time.Second):
 		t.Fatal("serve did not exit after cancel")
+	}
+}
+
+var uiAddrRe = regexp.MustCompile(`web UI: http://(127\.0\.0\.1:\d+)`)
+
+// startServe runs serve until the test ends and waits until it started.
+func (e *testEnv) startServe() (stderr *syncBuffer, stop func() int) {
+	e.t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	var so, se syncBuffer
+	done := make(chan int, 1)
+	go func() {
+		done <- run(ctx, []string{"--config", e.cfgPath, "serve", "--shutdown-timeout", "30s"}, &so, &se, func(string) (string, bool) { return "", false })
+	}()
+	stop = func() int {
+		cancel()
+		select {
+		case c := <-done:
+			done <- c
+			return c
+		case <-time.After(60 * time.Second):
+			e.t.Fatal("serve did not exit after cancel")
+			return -1
+		}
+	}
+	e.t.Cleanup(func() { stop() })
+	deadline := time.Now().Add(30 * time.Second)
+	for !strings.Contains(se.String(), "server: started") {
+		select {
+		case code := <-done:
+			e.t.Fatalf("serve exited early with %d\nstderr:\n%s", code, se.String())
+		default:
+		}
+		if time.Now().After(deadline) {
+			e.t.Fatalf("serve did not start\nstderr:\n%s", se.String())
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	return &se, stop
+}
+
+func TestServeWebUI(t *testing.T) {
+	e := newTestEnv(t)
+	e.withServerUI("127.0.0.1:0", "", "off", "127.0.0.1:0")
+	se, stop := e.startServe()
+	m := uiAddrRe.FindStringSubmatch(se.String())
+	if m == nil {
+		t.Fatalf("web UI address not logged\nstderr:\n%s", se.String())
+	}
+	ui := m[1]
+	if !strings.Contains(se.String(), "web UI setup: open http://"+ui+"/setup and enter setup code ") {
+		t.Fatalf("no setup code message\nstderr:\n%s", se.String())
+	}
+	resp, err := http.Get("http://" + ui + "/setup")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Security-Policy") == "" {
+		t.Fatalf("GET /setup = %d %v", resp.StatusCode, resp.Header)
+	}
+	if c := stop(); c != 0 {
+		t.Fatalf("serve exit = %d\nstderr:\n%s", c, se.String())
+	}
+}
+
+func TestServeWebUIOff(t *testing.T) {
+	e := newTestEnv(t)
+	e.withServer("127.0.0.1:0", "")
+	se, _ := e.startServe()
+	if !strings.Contains(se.String(), "web UI is disabled") || strings.Contains(se.String(), "setup code") {
+		t.Fatalf("stderr:\n%s", se.String())
 	}
 }

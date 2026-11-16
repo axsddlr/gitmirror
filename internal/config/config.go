@@ -43,6 +43,7 @@ const (
 	defaultStateDir    = "./data"
 	defaultConcurrency = 4
 	defaultListen      = ":8080"
+	defaultUIListen    = "127.0.0.1:8090"
 	defaultInterval    = "1h"
 	minInterval        = time.Minute
 	defaultGrace       = "24h"
@@ -65,8 +66,14 @@ type Config struct {
 	Server Server `yaml:"server"`
 	// Git configures how git child processes are run.
 	Git Git `yaml:"git"`
-	// Rules are the one-way mirror rules. At least one is required.
+	// Rules are the one-way mirror rules. A config may have none (rules can
+	// also be managed in the web UI); sync and plan refuse to run without
+	// any (ErrNoRules).
 	Rules []Rule `yaml:"rules"`
+
+	// uiForges and uiRules name the entries Merge added from the web UI;
+	// nil for a config parsed from a file. See ForgeOrigin / RuleOrigin.
+	uiForges, uiRules map[string]bool
 }
 
 // Forge describes one forge instance. After Parse, Token always holds the
@@ -155,6 +162,14 @@ type Server struct {
 	// MetricsListen is where /metrics is served, on its own listener (never
 	// the main one). Default "127.0.0.1:9090"; "off" disables metrics.
 	MetricsListen string `yaml:"metrics_listen"`
+	// UIListen is where the web UI is served, on its own listener. Default
+	// "127.0.0.1:8090"; "off" disables the web UI.
+	UIListen string `yaml:"ui_listen"`
+	// ExternalURL is the public base URL of gitmirror (for example
+	// "https://mirror.example.com"), without a trailing slash; empty means
+	// unknown. The web UI uses it for webhook URLs and marks its cookies
+	// Secure when it is https.
+	ExternalURL string `yaml:"external_url"`
 }
 
 // String implements fmt.Stringer without exposing the webhook secret.
@@ -178,63 +193,63 @@ func (s Server) LogValue() slog.Value {
 // Rule is one one-way mirror rule. The optional fields override Defaults.
 type Rule struct {
 	// Name is the unique rule name (same charset as forge names).
-	Name string `yaml:"name"`
+	Name string `yaml:"name" json:"name"`
 	// From selects the source repositories.
-	From Source `yaml:"from"`
+	From Source `yaml:"from" json:"from"`
 	// To describes where they are mirrored to.
-	To Dest `yaml:"to"`
+	To Dest `yaml:"to" json:"to"`
 
 	// Interval overrides Defaults.Interval when non-empty.
-	Interval string `yaml:"interval"`
+	Interval string `yaml:"interval" json:"interval,omitempty"`
 	// Include overrides Defaults.Include when non-nil.
-	Include []string `yaml:"include"`
+	Include []string `yaml:"include" json:"include"`
 	// Visibility overrides Defaults.Visibility when non-empty.
-	Visibility string `yaml:"visibility"`
+	Visibility string `yaml:"visibility" json:"visibility,omitempty"`
 	// OnSourceDeleted overrides Defaults.OnSourceDeleted when non-empty.
-	OnSourceDeleted string `yaml:"on_source_deleted"`
+	OnSourceDeleted string `yaml:"on_source_deleted" json:"on_source_deleted,omitempty"`
 	// DeletionGrace overrides Defaults.DeletionGrace when non-empty.
-	DeletionGrace string `yaml:"deletion_grace"`
+	DeletionGrace string `yaml:"deletion_grace" json:"deletion_grace,omitempty"`
 	// DeleteMissingReleases overrides Defaults.DeleteMissingReleases when non-nil.
-	DeleteMissingReleases *bool `yaml:"delete_missing_releases"`
+	DeleteMissingReleases *bool `yaml:"delete_missing_releases" json:"delete_missing_releases,omitempty"`
 	// MaxRefDeletions overrides Defaults.MaxRefDeletions when non-nil.
-	MaxRefDeletions *int `yaml:"max_ref_deletions"`
+	MaxRefDeletions *int `yaml:"max_ref_deletions" json:"max_ref_deletions,omitempty"`
 	// MaxRefDeletionsPercent overrides Defaults.MaxRefDeletionsPercent when non-nil.
-	MaxRefDeletionsPercent *int `yaml:"max_ref_deletions_percent"`
+	MaxRefDeletionsPercent *int `yaml:"max_ref_deletions_percent" json:"max_ref_deletions_percent,omitempty"`
 	// Adopt allows writing to a destination repo this tool did not create.
-	Adopt bool `yaml:"adopt"`
+	Adopt bool `yaml:"adopt" json:"adopt,omitempty"`
 	// AllowPublish allows visibility "match-source" to make an adopted
 	// private destination public. Without it an adopted destination is
 	// never made public.
-	AllowPublish bool `yaml:"allow_publish"`
+	AllowPublish bool `yaml:"allow_publish" json:"allow_publish,omitempty"`
 }
 
 // Source selects source repositories: exactly one of Owner, StarredBy, Repo.
 type Source struct {
 	// Forge names an entry of Config.Forges.
-	Forge string `yaml:"forge"`
+	Forge string `yaml:"forge" json:"forge,omitempty"`
 	// Owner selects every repo of a user/org.
-	Owner string `yaml:"owner"`
+	Owner string `yaml:"owner" json:"owner,omitempty"`
 	// StarredBy selects every repo starred by a user.
-	StarredBy string `yaml:"starred_by"`
+	StarredBy string `yaml:"starred_by" json:"starred_by,omitempty"`
 	// Repo selects a single repo, as "owner/name".
-	Repo string `yaml:"repo"`
+	Repo string `yaml:"repo" json:"repo,omitempty"`
 	// Filter narrows Owner / StarredBy selections. After Parse it is non-nil
 	// (with defaults filled) for those selections and nil for Repo.
-	Filter *Filter `yaml:"filter"`
+	Filter *Filter `yaml:"filter" json:"filter,omitempty"`
 }
 
 // Filter narrows a multi-repo source selection.
 type Filter struct {
 	// Forks: include forks (default false).
-	Forks *bool `yaml:"forks"`
+	Forks *bool `yaml:"forks" json:"forks,omitempty"`
 	// Archived: include archived repos (default true).
-	Archived *bool `yaml:"archived"`
+	Archived *bool `yaml:"archived" json:"archived,omitempty"`
 	// Private: include private repos (default true).
-	Private *bool `yaml:"private"`
+	Private *bool `yaml:"private" json:"private,omitempty"`
 	// Include is a list of path.Match patterns on the repo name (default ["*"]).
-	Include []string `yaml:"include"`
+	Include []string `yaml:"include" json:"include"`
 	// Exclude is a list of path.Match patterns on the repo name.
-	Exclude []string `yaml:"exclude"`
+	Exclude []string `yaml:"exclude" json:"exclude"`
 }
 
 // Dest describes a destination: exactly one of Owner (with optional Name
@@ -246,13 +261,13 @@ type Filter struct {
 // be checked then.
 type Dest struct {
 	// Forge names an entry of Config.Forges.
-	Forge string `yaml:"forge"`
+	Forge string `yaml:"forge" json:"forge,omitempty"`
 	// Owner is the destination owner (template).
-	Owner string `yaml:"owner"`
+	Owner string `yaml:"owner" json:"owner,omitempty"`
 	// Name is the destination repo name template. Default "{{.Name}}".
-	Name string `yaml:"name"`
+	Name string `yaml:"name" json:"name"`
 	// Repo is a literal "owner/name" destination.
-	Repo string `yaml:"repo"`
+	Repo string `yaml:"repo" json:"repo,omitempty"`
 }
 
 // RuleSettings is a rule's resolved per-rule view (rule overrides applied over defaults).
@@ -388,6 +403,11 @@ func Parse(data []byte, env func(string) (string, bool), readFile func(string) (
 	if v, ok := env(stateDirEnv); ok && v != "" {
 		c.StateDir = v
 	}
+	// GITMIRROR_UI_LISTEN likewise overrides server.ui_listen (a container
+	// sets it to ":8090" so the UI is reachable through a published port).
+	if v, ok := env(uiListenEnv); ok && v != "" {
+		c.Server.UIListen = v
+	}
 	c.applyDefaults()
 	errs := c.resolveSecrets(readFile)
 	if err := c.Validate(); err != nil {
@@ -401,6 +421,9 @@ func Parse(data []byte, env func(string) (string, bool), readFile func(string) (
 
 // stateDirEnv is the environment variable that overrides state_dir.
 const stateDirEnv = "GITMIRROR_STATE_DIR"
+
+// uiListenEnv is the environment variable that overrides server.ui_listen.
+const uiListenEnv = "GITMIRROR_UI_LISTEN"
 
 var varRef = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)`)
 
@@ -463,10 +486,16 @@ func (c *Config) applyDefaults() {
 	case strings.EqualFold(c.Server.MetricsListen, "off"):
 		c.Server.MetricsListen = "off"
 	}
+	c.Server.UIListen = strings.TrimSpace(c.Server.UIListen)
+	switch {
+	case c.Server.UIListen == "":
+		c.Server.UIListen = defaultUIListen
+	case strings.EqualFold(c.Server.UIListen, "off"):
+		c.Server.UIListen = "off"
+	}
+	c.Server.ExternalURL = strings.TrimRight(strings.TrimSpace(c.Server.ExternalURL), "/")
 	for name, f := range c.Forges {
-		f.Type = strings.ToLower(strings.TrimSpace(f.Type))
-		f.URL = strings.TrimRight(strings.TrimSpace(f.URL), "/")
-		c.Forges[name] = f
+		c.Forges[name] = normaliseForge(f)
 	}
 	d := &c.Defaults
 	if d.Interval == "" {
@@ -494,24 +523,37 @@ func (c *Config) applyDefaults() {
 		d.MaxRefDeletionsPercent = &n
 	}
 	for i := range c.Rules {
-		r := &c.Rules[i]
-		if r.Include != nil {
-			r.Include = dedupe(r.Include)
+		applyRuleDefaults(&c.Rules[i])
+	}
+}
+
+// normaliseForge lowercases the type and trims the URL.
+func normaliseForge(f Forge) Forge {
+	f.Type = strings.ToLower(strings.TrimSpace(f.Type))
+	f.URL = strings.TrimRight(strings.TrimSpace(f.URL), "/")
+	return f
+}
+
+// applyRuleDefaults fills a rule's defaults in place (destination name
+// template, source filter). It writes into r.From.Filter, so r must not
+// share its Filter with a rule another goroutine reads.
+func applyRuleDefaults(r *Rule) {
+	if r.Include != nil {
+		r.Include = dedupe(r.Include)
+	}
+	if r.To.Repo == "" && r.To.Name == "" {
+		r.To.Name = "{{.Name}}"
+	}
+	if r.From.Repo == "" {
+		if r.From.Filter == nil {
+			r.From.Filter = &Filter{}
 		}
-		if r.To.Repo == "" && r.To.Name == "" {
-			r.To.Name = "{{.Name}}"
-		}
-		if r.From.Repo == "" {
-			if r.From.Filter == nil {
-				r.From.Filter = &Filter{}
-			}
-			f := r.From.Filter
-			f.Forks = boolDefault(f.Forks, false)
-			f.Archived = boolDefault(f.Archived, true)
-			f.Private = boolDefault(f.Private, true)
-			if f.Include == nil {
-				f.Include = []string{"*"}
-			}
+		f := r.From.Filter
+		f.Forks = boolDefault(f.Forks, false)
+		f.Archived = boolDefault(f.Archived, true)
+		f.Private = boolDefault(f.Private, true)
+		if f.Include == nil {
+			f.Include = []string{"*"}
 		}
 	}
 }

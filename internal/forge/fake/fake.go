@@ -114,6 +114,7 @@ type Provider struct {
 	calls       []string
 	failNext    map[string][]error
 	failAlways  map[string]error
+	hookSt      *hookState // created lazily by hooks.go
 }
 
 // New builds a fake provider.

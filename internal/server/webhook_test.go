@@ -134,7 +134,7 @@ func TestWebhookPushRunsTargetedSyncWithoutReconcile(t *testing.T) {
 	if rec.Code != http.StatusAccepted || strings.TrimSpace(rec.Body.String()) != "accepted" {
 		t.Fatalf("got %d %q", rec.Code, rec.Body.String())
 	}
-	f.clock.Advance(s.Debounce)
+	f.advanceDebounce(s)
 	jobs := f.waitJobs(3)
 	j := jobs[2]
 	if j.Lane != laneWebhook || !slices.Equal(j.Job.Rules, []string{"r1"}) || !slices.Equal(j.Job.Repos, []string{"alice/a"}) || j.Job.Trigger != "webhook" {
@@ -170,7 +170,7 @@ func TestWebhookDebounceCollapsesPushes(t *testing.T) {
 	if n := len(f.doneJobs()); n != 2 {
 		t.Fatalf("a webhook job ran before the debounce window ended (%d jobs)", n)
 	}
-	f.clock.Advance(s.Debounce)
+	f.advanceDebounce(s)
 	f.waitJobs(3)
 	waitFor(t, 10*time.Second, func() bool { return s.webhookDepth() == 0 && !s.busy(laneWebhook) }, "webhook lane idle")
 	jobs := f.doneJobs()
@@ -205,7 +205,7 @@ func TestWebhookUnknownRepoOnOwnerRuleRunsFullSync(t *testing.T) {
 
 	// Now it is in r1's last resolve, so a push targets it.
 	hook(s.Handler(), "src", "push", "alice", "fresh")
-	f.clock.Advance(s.Debounce)
+	f.advanceDebounce(s)
 	jobs = f.waitJobs(4)
 	if j := jobs[3]; j.Lane != laneWebhook || !slices.Equal(j.Job.Repos, []string{"alice/fresh"}) {
 		t.Fatalf("job = %+v", j)

@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"gitmirror/internal/app"
+	"gitmirror/internal/config"
 	"gitmirror/internal/engine"
 	"gitmirror/internal/state"
 )
@@ -59,18 +60,17 @@ func (c *cli) runSync(cmd *cobra.Command, req app.SyncRequest, plan bool, lockTi
 	if err != nil {
 		return err
 	}
-	opts := appOptions()
-	opts.Logger = c.logger
+	opts := c.options()
 	opts.ReadOnly = plan
 	opts.LockTimeout = lockTimeout
 	a, err := app.Build(cmd.Context(), cfg, opts)
 	if err != nil {
-		return &exitError{exitFailed, err}
+		return c.buildError(err)
 	}
 	defer a.Close()
 	res, err := a.SyncWith(cmd.Context(), req)
 	if err != nil {
-		if errors.Is(err, app.ErrNoMatch) {
+		if errors.Is(err, app.ErrNoMatch) || errors.Is(err, config.ErrNoRules) {
 			return &exitError{exitUsage, err}
 		}
 		return &exitError{exitFailed, err}

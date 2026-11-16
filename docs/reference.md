@@ -64,7 +64,57 @@ destroy data.
   The state directory and cache directories are created with mode `0700`, the lock file `0600`.
 * **Secret redaction.** Tokens are never printed in logs, errors or config dumps; error messages from
   `${VAR}` interpolation name the variable, never its value. `token_file` / `webhook_secret_file` keep
-  secrets out of the config file.
+  secrets out of the config file. Tokens entered in the web UI are stored encrypted (see
+  [Web UI](#web-ui)) and never shown again.
+
+## Web UI
+
+`gitmirror serve` also serves a web UI for setting gitmirror up without a config file. The UI
+calls forges **sites** and rules **mirrors**.
+
+* **Listener.** `server.ui_listen`, default `127.0.0.1:8090`, on its own listener (never the
+  webhook port). `off` disables it. The environment variable `GITMIRROR_UI_LISTEN` overrides it
+  (env > config file > default); the Docker image sets it to `:8090` and exposes port 8090.
+* **First start.** While no admin password exists, `serve` logs at WARN
+  `web UI setup: open <url>/setup and enter setup code XXXX-XXXX-XXXX` and every page redirects to
+  `/setup`. Enter the code there and choose the password (at least 12 characters). The code is kept
+  only in memory: a restart before setup logs a new one.
+* **Pages.** **Dashboard** (status of every copy, **Sync now**, **Sync everything now**, **Details**
+  with recent runs and steps), **Sites** (add a GitHub, Gitea or Forgejo site; the token is tested
+  before it is saved), **Mirrors** (a five-step form: **Copy from**, **Repositories**, **Copy to**,
+  **Options**, **Check and save**, which previews what would happen before **Save mirror**),
+  **Webhooks** (**Public address**, **Webhook secret**, **Set up webhooks for me**) and **Settings**
+  (**Change password**).
+* **Changes apply at once.** Sites and mirrors saved in the web UI are used immediately; no restart
+  is needed.
+* **Together with the config file.** The config file is optional. Forges and rules from the file
+  and from the web UI are merged and validated together (unique names; loop, duplicate-destination
+  and self-mirror checks across both); file entries are shown read-only ("From config file — edit
+  it there"). See [configuration.md](configuration.md).
+* **Forgotten password.** Stop `serve`, run `gitmirror reset-admin` (same config and state dir),
+  start `serve` again and use the new setup code. Sites, mirrors and history are kept; every
+  session is signed out.
+
+Security model:
+
+* **Local only by default.** The default listener is `127.0.0.1`. To use the UI from other machines,
+  put an HTTPS reverse proxy in front of it (and set `server.external_url` or the **Public address**
+  to the `https://` URL) rather than listening on all addresses. In Docker, publish it as
+  `127.0.0.1:8090:8090`.
+* **Setup code.** Until a password exists, only someone who can read the log can claim the UI.
+* **Password.** One admin password, hashed with PBKDF2-SHA256 (600,000 iterations, random salt).
+* **Sessions.** A random token in an `HttpOnly`, `SameSite=Strict` cookie (`Secure` over TLS or with
+  an `https` `external_url`); only its SHA-256 is stored. Sessions expire after 24 hours idle or 7
+  days. Changing the password signs out every other session.
+* **CSRF.** Every form is protected by a per-session token and an `Origin` check.
+* **Rate limit.** Wrong sign-in, setup and password-change attempts are limited to 5 per address and
+  100 in total per 15 minutes ("Too many wrong attempts...").
+* **Tokens at rest.** Site tokens and the web UI's webhook secret are sealed with AES-256-GCM under a
+  random key in `<state_dir>/secret.key` (mode `0600`). Back up `secret.key` together with
+  `state.db`: without it the saved tokens cannot be read and gitmirror stops with an error naming
+  the site.
+* **Strict Content-Security-Policy.** No inline scripts or styles, nothing loaded from other hosts,
+  and the pages cannot be framed.
 
 ## Install
 
@@ -90,26 +140,37 @@ validate` checks both.
 docker build -t gitmirror .          # or: docker pull ghcr.io/OWNER/gitmirror:latest
 docker run -d --name gitmirror --restart unless-stopped \
   --stop-timeout 660 \
-  -p 8080:8080 \
-  -v "$PWD/config.yaml:/config/config.yaml:ro" \
+  -p 8080:8080 -p 127.0.0.1:8090:8090 \
   -v gitmirror-data:/data \
-  -e GITHUB_TOKEN -e GITEA_TOKEN \
   gitmirror
+docker logs gitmirror                # shows the web UI setup code
 ```
 
+Then open http://localhost:8090. With a config file, add
+`-v "$PWD/config.yaml:/config/config.yaml:ro"` (and `-e GITHUB_TOKEN -e GITEA_TOKEN` for `${VAR}`
+tokens).
+
 The image is Alpine-based, runs as uid/gid `10001` (user `gitmirror`), contains `git`, `git-lfs`
-and `tini`, uses `/data` as `HOME` and working directory, and reads `/config/config.yaml`
-(`GITMIRROR_CONFIG`). The image sets `GITMIRROR_STATE_DIR=/data`, which overrides
-`state_dir` (precedence: env > config file > default `./data`), so no `state_dir` setting is needed. A bind-mounted `/data` must be writable by uid 10001. `--stop-timeout 660`
-lets running syncs finish after `docker stop` (Docker's default is 10 s; `serve` allows 10 minutes).
-The image has a `HEALTHCHECK` on `/healthz`. Other commands work too:
-`docker run --rm ... gitmirror plan`.
+and `tini`, and uses `/data` as `HOME`. Its working directory is `/config`, and it does **not** set
+`GITMIRROR_CONFIG`, so `/config/config.yaml` is read when mounted and the built-in defaults are used
+when it is not (a path given through `GITMIRROR_CONFIG` or `-c` must exist). The image sets:
+
+* `GITMIRROR_STATE_DIR=/data`, which overrides `state_dir` (env > config file > default `./data`),
+  so no `state_dir` setting is needed. A bind-mounted `/data` must be writable by uid 10001.
+* `GITMIRROR_UI_LISTEN=:8090`, which overrides `server.ui_listen`, so the web UI is reachable
+  through a published port. Publish it on `127.0.0.1` of the host, or behind an HTTPS reverse proxy.
+
+Ports: `8080` (webhooks, `/healthz`, `/readyz`) and `8090` (web UI) are exposed; do not publish the
+metrics port. `--stop-timeout 660` lets running syncs finish after `docker stop` (Docker's default
+is 10 s; `serve` allows 10 minutes). The image has a `HEALTHCHECK` on `/healthz`. Other commands
+work too: `docker run --rm ... gitmirror plan`.
 
 ### Docker Compose
 
-[`deploy/docker-compose.yml`](../deploy/docker-compose.yml) runs gitmirror with a config bind mount,
-a data volume, Docker `secrets:` mapped to `token_file`, `restart: unless-stopped`, a long
-`stop_grace_period` and a healthcheck. It also contains a commented Gitea service for local trials.
+[`deploy/docker-compose.yml`](../deploy/docker-compose.yml) runs gitmirror with a data volume, the
+web UI published on `127.0.0.1:8090`, `restart: unless-stopped`, a long `stop_grace_period` and a
+healthcheck. A config bind mount and Docker `secrets:` mapped to `token_file` are included as
+commented "advanced" options. It also contains a commented Gitea service for local trials.
 
 ### systemd
 
@@ -118,7 +179,12 @@ unit (`User=gitmirror`, `StateDirectory=gitmirror`, `ProtectSystem=strict`,
 credentials via `LoadCredential=` and `token_file: "${CREDENTIALS_DIRECTORY}/..."`). If you would rather
 run one-shot syncs on a schedule, use [`gitmirror-sync.timer`](../deploy/systemd/gitmirror-sync.timer) with
 [`gitmirror-sync.service`](../deploy/systemd/gitmirror-sync.service) **instead of** the daemon, not
-alongside it: the state-dir lock makes the second process fail.
+alongside it: the state-dir lock makes the second process fail. The unit passes
+`-c /etc/gitmirror/config.yaml`, so that file must exist (for a web-UI-only setup it can contain just
+`state_dir: /var/lib/gitmirror`; remove the `LoadCredential=` lines you do not use, because systemd
+refuses to start when a credential file is missing). The web UI then listens on `127.0.0.1:8090` of
+the server: reach it through an SSH tunnel (`ssh -L 8090:127.0.0.1:8090 server`) or an HTTPS
+reverse proxy.
 
 ## Commands
 
@@ -137,6 +203,7 @@ Usage:
 Available Commands:
   help        Help about any command
   plan        Show what a sync would do, without changing anything
+  reset-admin Forget the web UI admin password and sign everyone out
   serve       Run the daemon: scheduled syncs, webhooks, /healthz, /readyz and /metrics (own listener)
   status      Show the last known state of every pair (no network)
   sync        Mirror every pair now
@@ -144,7 +211,7 @@ Available Commands:
   version     Print version information
 
 Flags:
-  -c, --config string       path to the config file (env GITMIRROR_CONFIG) (default "config.yaml")
+  -c, --config string       path to the config file (env GITMIRROR_CONFIG); without it a missing config.yaml means built-in defaults (default "config.yaml")
   -h, --help                help for gitmirror
       --json                machine-readable JSON output on stdout
       --log-format string   log format: text or json (default "text")
@@ -160,19 +227,89 @@ Command-specific flags:
 | `validate` | `--offline` (config and local tools only, no network) |
 | `status` | `--runs N` (also list the N most recent runs), `--audit N` (also list the N most recent audit events: destination create, adopt, archive, delete) |
 | `serve` | `--lock-timeout <duration>`, `--shutdown-timeout <duration>` (default 10m: how long running syncs may finish after SIGINT/SIGTERM before they are aborted; exits 0) |
+| `reset-admin` | `--lock-timeout <duration>`. Removes the web UI admin password and every web UI session; the next `serve` logs a new setup code. Sites, mirrors and the rest of the state are kept. Stop `serve` first: it refuses while another process holds the state dir. |
 | `version` | none |
 
 `--lock-timeout` waits for another gitmirror process to release the state dir (`0` fails at once).
 
+Every command works with sites and mirrors from the web UI as well as from the config file, as long
+as it uses the same state dir. `sync`, `plan` and `validate` (without `--offline`) exit with code
+2 when there is no mirror rule at all; `serve` starts anyway and waits for rules to be added.
+
+### Reading the output
+
+`plan` shows exactly what a sync would do and changes nothing, neither on the forges nor in the
+state database:
+
+```
+ok       github:you/project → gitea:github-mirror/project  prepare:ok git:ok lfs:skipped settings:ok releases:unchanged wiki:skipped  666ms
+    - create repository gitea:github-mirror/project (private)
+    - push all 1 refs
+    - update settings of gitea:github-mirror/project: default branch
+1 pairs: 1 ok, 0 partial, 0 failed, 0 aborted; 0 rule errors; 0 reconcile (dry run)
+```
+
+Each line is one **pair** (source → destination) followed by what each step would do. Read the
+`- create repository` lines carefully on the first run: they tell you where every mirror will
+appear.
+
+`sync` prints the same kind of line for what it did:
+
+```
+ok       github:you/project → gitea:github-mirror/project  prepare:ok git:ok lfs:unchanged settings:unchanged releases:unchanged wiki:skipped  4.616s
+1 pairs: 1 ok, 0 partial, 0 failed, 0 aborted; 0 rule errors; 0 reconcile
+```
+
+The first run copies everything and can take a while for large repositories. Later runs only
+transfer what changed; a run with no changes reports `git:unchanged` and takes a few seconds.
+
+| Pair status | Meaning |
+|---|---|
+| `ok` | Everything that applies was mirrored. |
+| `partial` | Some steps worked but one (for example releases or the wiki) failed. Retried next run. |
+| `failed` | The pair could not be mirrored (for example the destination could not be created or the push was rejected). The error is on the line. |
+| `aborted` | A safety guard stopped the run before anything was changed (see [Troubleshooting](#troubleshooting)). |
+
+Step values: `ok` (changed something), `unchanged`, `skipped` (not applicable, e.g. the source has
+no wiki or LFS), `failed`. Exit codes for scripts: `0` all ok, `1` something failed or was aborted,
+`2` config or usage error, `3` partial. Limit `plan` and `sync` with `--rule NAME` or
+`--repo OWNER/NAME` (both repeatable). Add `--json` to any command for machine-readable output.
+
+`status` reads only the local state database, so it works offline:
+
+```
+PAIR                                              LAST SUCCESS         FAILURES  LAST ERROR
+my-github: github:you/project → gitea:github-mirror/project  2026-11-14 11:42:29  0
+
+recent runs (2):
+ID  STARTED              TRIGGER  STATUS  PAIR                                              ERROR
+2   2026-11-14 11:42:26  cli      ok      my-github: github:you/project → gitea:github-mirror/project
+1   2026-11-14 11:42:21  cli      ok      my-github: github:you/project → gitea:github-mirror/project
+```
+
+That is `gitmirror status --runs 5`. `--audit 20` also lists the last 20 times gitmirror created,
+adopted, archived or deleted a destination.
+
 ## Webhooks
 
 Webhooks make a push show up at the destination within seconds instead of at the next interval.
-They are configured on the **source** forge and POST to gitmirror:
+They are configured on the **source** forge and POST to gitmirror's `server.listen` port (default
+`8080`), never to the web UI port. The source forge must be able to reach that address; for GitHub
+that means from the internet.
 
-* URL: `https://<your-host>/webhook/<forge-name>`, where `<forge-name>` is the key under `forges:` in
-  your config (for example `/webhook/github`). Put a TLS reverse proxy in front of port 8080.
-* Secret: the value of `server.webhook_secret` (or the contents of `webhook_secret_file`). Without a
-  secret, webhooks are disabled and the endpoint answers 404.
+The web UI's **Webhooks** page shows the values below for each source site, and its **Set up
+webhooks for me** button creates the webhooks through the forge API: one organisation webhook for a
+mirror that copies a whole organisation, one per repository otherwise, skipping ones that already
+exist. That needs the webhook token permissions in [Token permissions](#token-permissions). By hand:
+
+* URL: `<public address>/webhook/<forge-name>`, where the public address is `server.external_url`
+  or the web UI's **Public address** (for example `https://mirror.example.com`), and `<forge-name>`
+  is the site's short name, the key under `forges:` (for example `/webhook/github`). Put a TLS
+  reverse proxy in front of port 8080. If one public name serves both, route `/webhook/` to
+  `server.listen` and everything else to `server.ui_listen`.
+* Secret: the value of `server.webhook_secret` (or the contents of `webhook_secret_file`), or else
+  the secret the web UI created (Webhooks page, **Show the secret**). Without any secret, webhooks
+  are disabled and the endpoint answers 404.
 * Content type: `application/json`.
 * Events to send:
 
@@ -197,6 +334,9 @@ everything in sync.
 | `GET /healthz` | `200 ok` while the process is up. |
 | `GET /readyz` | `200 ready` once started, `503` during shutdown. |
 | `POST /webhook/<forge>` | Webhook receiver. |
+
+The web UI is served on its own listener, `server.ui_listen` (default `127.0.0.1:8090`); see
+[Web UI](#web-ui).
 
 `GET /metrics` (Prometheus text format, plus standard Go and process collectors) is **not** served
 on that listener, because it is unauthenticated and its labels contain repository and rule names.
@@ -229,7 +369,8 @@ Give each forge a token with the least access its role needs. "Source" means the
 | Source | `repo` (or `public_repo` if every source repo is public) |
 | Destination | `repo`, plus `workflow` if mirrored history changes files under `.github/workflows/` |
 | Destination with `on_source_deleted: delete` | add `delete_repo` |
-| Organisations | GitHub has no API to create organisations; create them in the UI first |
+| Source, with **Set up webhooks for me** | add `admin:repo_hook` (and `admin:org_hook` for organisation webhooks) |
+| Organisations | GitHub has no API to create organisations; create them on GitHub first |
 
 **GitHub, fine-grained personal access token**
 
@@ -247,6 +388,7 @@ A fine-grained token is limited to one resource owner (one user or one organisat
 | Source | `read:repository`, `read:user`, `read:organization` |
 | Destination | `write:repository`, `read:user`, plus `write:organization` when mirroring into an organisation or letting gitmirror create one |
 | Destination with `on_source_deleted: delete` | `write:repository`; the token's user must be an owner or admin of the repository |
+| Source, with **Set up webhooks for me** | `write:repository` (`write:organization` for organisation webhooks); the token's user must be an admin of the repository |
 
 Creating organisations also requires the account to be allowed to: it must be an admin, or have "may create organisations" enabled (`DEFAULT_ALLOW_CREATE_ORGANIZATION`) on a server without `DISABLE_REGULAR_ORG_CREATION`. Git over HTTPS uses the same repository scope: read for fetching, write for pushing.
 
@@ -256,6 +398,19 @@ Not yet confirmed: whether GitHub rejects a push that touches `.github/workflows
 
 ## Troubleshooting
 
+* **Cannot open http://localhost:8090.** Check the log for `web UI: http://...` (where it listens)
+  or `web UI is disabled`. In Docker the UI must listen on `:8090` inside the container (the image
+  sets `GITMIRROR_UI_LISTEN=:8090`) and the port must be published (`-p 127.0.0.1:8090:8090`). On a
+  server it only listens on `127.0.0.1`: use an SSH tunnel or a reverse proxy.
+* **`listen for the web UI on ...: bind`.** Another program uses port 8090. Set `server.ui_listen`
+  or `GITMIRROR_UI_LISTEN` to another address.
+* **"That setup code is not right."** Use the code from the newest `web UI setup` log line; a
+  restart creates a new one.
+* **"Too many wrong attempts."** Wait 15 minutes, then try again.
+* **Forgotten web UI password.** Stop `serve`, run `gitmirror reset-admin`, start `serve` and use the
+  new setup code.
+* **A site's token cannot be decrypted at start.** `state.db` was restored or moved without its
+  `secret.key`. Restore the matching `secret.key` into the state dir.
 * **"destination ... already exists and was not created by gitmirror"**: the destination repo exists
   and the rule does not allow adopting it. Pick another destination or set `adopt: true` (this prunes
   the repo to match the source).

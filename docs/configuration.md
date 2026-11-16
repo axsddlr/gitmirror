@@ -1,8 +1,26 @@
 # Configuration reference
 
-gitmirror reads one YAML file (default `config.yaml`; override with `-c/--config` or the
-`GITMIRROR_CONFIG` environment variable). A fully commented sample is in
-[`config.example.yaml`](../config.example.yaml).
+The config file is **optional**. Sites (forges) and mirrors (rules) can be managed entirely in the
+web UI (see [getting-started.md](getting-started.md)); the file is for settings the web UI does not
+show, for keeping a setup in version control, and for tokens kept in files.
+
+gitmirror reads one YAML file: `config.yaml` in the working directory by default, or the path
+given with `-c/--config` or the `GITMIRROR_CONFIG` environment variable.
+
+* When neither `-c` nor `GITMIRROR_CONFIG` is given and `config.yaml` does not exist, gitmirror
+  uses the built-in defaults, exactly as for an empty file (environment overrides such as
+  `GITMIRROR_STATE_DIR` included). A path given with `-c` or `GITMIRROR_CONFIG` must exist.
+* The Docker image does **not** set `GITMIRROR_CONFIG`. Its working directory is `/config`, so it
+  reads `/config/config.yaml` when you mount one and uses the defaults when you do not.
+* Forges and rules from the file and from the web UI are **merged and validated together**: names
+  must be unique across both (a web UI entry cannot reuse a name from the file), and the loop,
+  duplicate-destination and self-mirror checks below cover both. Entries from the file are shown
+  read-only in the web UI. The `defaults` section applies to rules from both.
+* The file is read when a command starts; restart `serve` after changing it. Changes made in the
+  web UI apply at once.
+
+A fully commented sample is in [`config.example.yaml`](../config.example.yaml). A step-by-step
+example is in [Walkthrough: a first config file](#walkthrough-a-first-config-file).
 
 Rules of the loader (`internal/config`):
 
@@ -27,17 +45,20 @@ Rules of the loader (`internal/config`):
 | `defaults` | object | see below | see below | Settings every rule inherits. |
 | `server` | object | see below | see below | HTTP listener / webhook receiver for `serve`. |
 | `git` | object | see below | see below | How git and git-lfs are run. |
-| `rules` | list | none | at least one | One-way mirror rules. |
+| `rules` | list | none | may be empty | One-way mirror rules. Rules can also come from the web UI. `serve` idles (with a warning) while there are none; `sync`, `plan` and `validate` (without `--offline`) exit with code 2 and `no mirror rules configured: add one in the web UI or in the config file`. |
 
 ## `forges.<name>`
 
 | Key | Type | Default | Validation | Description |
 |---|---|---|---|---|
-| `type` | string | none (required) | lower-cased and trimmed; one of `github`, `gitea` (`config.KnownForgeTypes`). Use `gitea` for Forgejo. | Provider type. |
+| `type` | string | none (required) | lower-cased and trimmed; one of `github`, `gitea` (`config.KnownForgeTypes`). Use `gitea` for Forgejo (the web UI's "Forgejo" kind is stored as `gitea` too). | Provider type. |
 | `url` | string | none | Required for `gitea`. If set: absolute `http`/`https` URL with a host. Trailing `/` trimmed. | Base URL. For `github` the provider default is `https://api.github.com` (set `url` for GitHub Enterprise). The normalised URL is recorded with the ownership of every destination created or adopted on this forge; changing it to another server makes those destinations unowned (they need `adopt: true` again). |
 | `token` | string | none | Exactly one of `token` / `token_file` is required; both set is an error. | API token; also used for git over HTTPS. |
 | `token_file` | string | none | File must exist and be non-empty after trimming. | Path of a file holding the token (Docker/Compose secrets, systemd credentials). |
 | `username` | string | `x-access-token` (github), `git` (gitea) | none | Username for git-over-HTTP basic auth. |
+
+Forges added in the web UI ("sites") are stored in the state database with their token encrypted
+(AES-256-GCM, key in `<state_dir>/secret.key`); `token_file` is not available for them.
 
 ## `defaults`
 
@@ -59,8 +80,10 @@ All keys can be overridden per rule.
 | Key | Type | Default | Validation | Description |
 |---|---|---|---|---|
 | `listen` | string | `:8080` | none (bind errors surface at start) | Listen address of `serve`. |
-| `webhook_secret` | string | none | Mutually exclusive with `webhook_secret_file` | Shared secret used to verify webhook signatures. If neither is set, `POST /webhook/<forge>` answers 404 and a warning is logged at start. |
+| `webhook_secret` | string | none | Mutually exclusive with `webhook_secret_file` | Shared secret used to verify webhook signatures. If neither is set and the web UI has none either, `POST /webhook/<forge>` answers 404 and a warning is logged at start. Opening the web UI's Webhooks page creates a random secret (stored encrypted in the state database) when the file has none; when the file sets one, the web UI uses it and does not show it. |
 | `webhook_secret_file` | string | none | File must exist and be non-empty after trimming | File holding the secret. |
+| `ui_listen` | string | `127.0.0.1:8090` | `host:port` or `off` (case-insensitive); must not use the same address as `listen` or `metrics_listen` (port `0` is exempt) | Listen address of the web UI, on its own listener. `off` disables the web UI. The environment variable `GITMIRROR_UI_LISTEN`, when set and non-empty, overrides this (precedence: env > config > default); the Docker image sets it to `:8090` so the UI is reachable through a published port. On first start (no admin password yet) `serve` logs a one-time setup code at WARN: open `<url>/setup` and enter it to choose the admin password. Keep it on `127.0.0.1` unless it is behind HTTPS. See [Web UI](reference.md#web-ui). |
+| `external_url` | string | none | Absolute `http`/`https` URL with a host; no user info, query or fragment. Trailing `/` trimmed. | The address people and forges use to reach gitmirror, e.g. `https://mirror.example.com`. Used for webhook URLs (`<external_url>/webhook/<forge>`) shown in the web UI and in the setup message; when it is `https`, web UI cookies are marked `Secure`. The web UI's **Public address** (Webhooks page) sets the same value, stored in the state database, when the file has none; when the file sets it, the web UI shows it read-only. |
 
 ## `git`
 
@@ -134,8 +157,9 @@ dropped pair as a deleted source.
 
 | Variable | Used for |
 |---|---|
-| `GITMIRROR_CONFIG` | Default for `-c/--config`. |
-| `GITMIRROR_STATE_DIR` | Overrides `state_dir` when non-empty (env > config > default `./data`). Applied in `config.Parse`/`config.Load`. Set to `/data` in the Docker image. |
+| `GITMIRROR_CONFIG` | Default for `-c/--config`. A path given this way must exist. Not set in the Docker image (it runs in `/config` and reads `config.yaml` from there when present). |
+| `GITMIRROR_STATE_DIR` | Overrides `state_dir` when non-empty (env > config > default `./data`). Applied in `config.Parse`/`config.Load`, also when there is no config file. Set to `/data` in the Docker image. |
+| `GITMIRROR_UI_LISTEN` | Overrides `server.ui_listen` when non-empty (env > config > default `127.0.0.1:8090`); `off` disables the web UI. Applied like `GITMIRROR_STATE_DIR`. Set to `:8090` in the Docker image. |
 | any `${VAR}` named in the config | Interpolation. |
 
 Git is run with a sanitised environment (`GIT_CONFIG*`, `GIT_DIR`, `GIT_ASKPASS`, tracing
@@ -144,3 +168,232 @@ disabled). By default git also ignores the system and global git configuration
 (`GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=<empty file>`, set after the stripping); see
 [`git.use_host_config`](#git). Variables git reads directly, such as `HTTPS_PROXY`, `HTTP_PROXY`,
 `NO_PROXY` and `GIT_SSL_CAINFO`, are passed through.
+
+## Walkthrough: a first config file
+
+This is the config-file way of doing what [getting-started.md](getting-started.md) does in the web
+UI. Tokens come from [getting-started.md, step 5](getting-started.md#5-create-access-tokens).
+
+### A minimal config
+
+Create `config.yaml` in the folder gitmirror starts in (or anywhere, and pass
+`-c path/to/config.yaml`). This one mirrors **every repository you own on GitHub** into an
+organisation called `github-mirror` on your Gitea:
+
+```yaml
+# Where gitmirror keeps its database, git caches and lock file.
+state_dir: ./data
+
+forges:
+  github:
+    type: github
+    token: "${GITHUB_TOKEN}"     # read from the environment, see below
+  gitea:
+    type: gitea
+    url: https://git.example.com # your Gitea's base URL
+    token: "${GITEA_TOKEN}"
+
+rules:
+  - name: my-github
+    from:
+      forge: github
+      owner: your-github-username   # a user or an organisation
+    to:
+      forge: gitea
+      owner: github-mirror          # created on Gitea if it does not exist
+```
+
+What this does, with the defaults that apply:
+
+* **Which repos**: all repositories of `your-github-username`. When that is the token's own
+  account, private repositories are included. Forks are excluded by default.
+* **What is copied**: branches, tags, LFS files, description/homepage/topics/default branch,
+  releases with their files, and the wiki (`include: [git, lfs, settings, releases, wiki]`).
+* **Names**: each repo keeps its name (`github-mirror/<repo>`).
+* **Visibility**: mirrors are created **private**.
+* **Schedule**: every hour when running as a service (`interval: 1h`).
+* **Source deleted**: the mirror is kept (`on_source_deleted: keep`).
+
+### Common variations
+
+Only some repositories, by name pattern:
+
+```yaml
+    from:
+      forge: github
+      owner: your-github-username
+      filter:
+        include: ["project-*", "dotfiles"]
+        exclude: ["*-old"]
+        forks: true          # also include forks
+        archived: false      # skip archived repos
+```
+
+A single repository:
+
+```yaml
+  - name: one-repo
+    from: { forge: github, repo: your-github-username/project }
+    to:   { forge: gitea,  repo: github-mirror/project }
+```
+
+Everything a user has starred (owner prefix avoids name clashes):
+
+```yaml
+  - name: my-stars
+    from: { forge: github, starred_by: your-github-username }
+    to:   { forge: gitea, owner: stars, name: "{{.Owner}}-{{.Name}}" }
+    include: [git, lfs]       # just the code
+```
+
+The reverse direction, **Gitea to GitHub**, is the same shape with `from` and `to` swapped. GitHub
+cannot create organisations through the API, so a GitHub destination owner must be your own user or
+an organisation that already exists.
+
+```yaml
+  - name: publish
+    from: { forge: gitea,  repo: me/project }
+    to:   { forge: github, repo: your-github-username/project }
+    visibility: match-source  # public on GitHub only if public on Gitea
+```
+
+Two directions at once are two rules on **different** repositories; a rule pair that would mirror a
+repository back into itself is rejected.
+
+**If the destination repository already exists:** gitmirror refuses to write into a repository it
+did not create, so a typo can never overwrite real work. To turn an existing repository into a
+mirror, add `adopt: true` to the rule. Its branches and tags that do not exist at the source
+**will be deleted**.
+
+> **YAML gotcha:** inside `{ ... }` an environment reference must be quoted:
+> `{ type: github, token: "${GITHUB_TOKEN}" }`. Unquoted, it is invalid YAML.
+
+### Giving gitmirror the tokens
+
+Never paste tokens into `config.yaml`. Use one of these:
+
+**Environment variables** (as in the config above):
+
+```sh
+# bash
+export GITHUB_TOKEN='ghp_...'
+export GITEA_TOKEN='...'
+```
+
+```powershell
+# PowerShell (current window only)
+$env:GITHUB_TOKEN = 'ghp_...'
+$env:GITEA_TOKEN  = '...'
+```
+
+**Token files**, better for services, because nothing has to be in the environment:
+
+```yaml
+forges:
+  github: { type: github, token_file: /etc/gitmirror/github_token }
+  gitea:  { type: gitea, url: https://git.example.com, token_file: /etc/gitmirror/gitea_token }
+```
+
+The file holds just the token (surrounding whitespace is ignored). Make it readable only by the
+account that runs gitmirror (`chmod 600` on Linux).
+
+### Validate
+
+First check the config and the local tools without any network access:
+
+```sh
+gitmirror validate --offline
+```
+
+```
+config: ok (2 forges, 1 rules)
+git: 2.47.1.windows.1
+git-lfs: 3.6.0
+```
+
+Then the full check, which logs in to each forge and lists every rule's repositories:
+
+```sh
+gitmirror validate
+```
+
+```
+config: ok (2 forges, 1 rules)
+git: 2.47.1.windows.1
+git-lfs: 3.6.0
+forge github: ok as your-github-username
+forge gitea: ok as you
+rule my-github: complete=yes pairs=12
+```
+
+`pairs=12` is the number of repositories the rule will mirror. If a line says something else, fix
+it before continuing. Typical messages:
+
+* `environment variable GITHUB_TOKEN is not defined`: the token was not exported in this terminal.
+* `forge gitea: ... 401`: wrong or expired token, or the wrong `url`.
+* `pairs=0`: wrong `owner`, or the filter excludes everything.
+
+The exit code is `0` when everything is fine and `2` for a config error. Then preview with
+`gitmirror plan`, copy once with `gitmirror sync`, and check with `gitmirror status`; what they
+print is explained in the reference under [Reading the output](reference.md#reading-the-output).
+Run `serve` to keep the mirrors up to date.
+
+### Docker Compose with token files
+
+[`deploy/docker-compose.yml`](../deploy/docker-compose.yml) has the config mount and Docker
+secrets commented out. To use them:
+
+```sh
+cd deploy
+# 1. Token files (readable by the container user, uid 10001):
+mkdir -p secrets
+printf '%s' 'ghp_...'        > secrets/github_token
+printf '%s' 'gitea-token'    > secrets/gitea_token
+printf '%s' 'a-long-random-string' > secrets/webhook_secret
+chmod 0444 secrets/*
+# 2. Config: copy your config.yaml here and point it at the secret files:
+#      forges:
+#        github: { type: github, token_file: /run/secrets/github_token }
+#        gitea:  { type: gitea, url: "https://git.example.com", token_file: /run/secrets/gitea_token }
+#      server:
+#        webhook_secret_file: /run/secrets/webhook_secret
+cp ../config.yaml config.yaml
+# 3. In docker-compose.yml uncomment the config.yaml volume line, the service's
+#    `secrets:` list and the top-level `secrets:` block.
+# 4. Check, then start:
+docker compose run --rm gitmirror validate
+docker compose up -d
+```
+
+`state_dir` in the config is ignored in the container (`GITMIRROR_STATE_DIR=/data` wins).
+`docker compose run --rm gitmirror plan` / `sync` / `status` work while the service is stopped;
+while it runs, use `docker compose exec gitmirror gitmirror status` (it reads the database without
+taking the lock).
+
+### systemd with credentials
+
+[`deploy/systemd/gitmirror.service`](../deploy/systemd/gitmirror.service) expects the config at
+`/etc/gitmirror/config.yaml` with `state_dir: /var/lib/gitmirror`, and token files in
+`/etc/gitmirror/credentials/` that systemd hands to the service (`LoadCredential=`; refer to them
+as `token_file: "${CREDENTIALS_DIRECTORY}/github_token"`). The setup commands are at the top of
+that file. For periodic one-shot runs instead of a daemon (no webhooks, no web UI), use
+`gitmirror-sync.timer` + `gitmirror-sync.service` from the same folder **instead of** the service,
+and edit `OnCalendar=` in the timer to change the schedule.
+
+### Windows: scheduled sync
+
+Instead of running `serve` (see [getting-started.md](getting-started.md#c-windows-start-at-sign-in)),
+you can run a one-shot `sync` every hour (no webhooks, and no web UI while it is not running):
+
+1. Put `gitmirror.exe`, `config.yaml` and token files in one folder, e.g. `C:\gitmirror`.
+2. In the config use **absolute** paths, because scheduled tasks do not start in that folder:
+   `state_dir: C:/gitmirror/data`, `token_file: C:/gitmirror/github_token`, and so on.
+3. Create an hourly task that runs as your user:
+
+   ```powershell
+   schtasks /Create /SC HOURLY /TN gitmirror /TR "C:\gitmirror\gitmirror.exe sync -c C:\gitmirror\config.yaml --log-format json"
+   ```
+
+The task's last result is gitmirror's exit code (`0` ok, `1` failed, `3` partial). Running
+`gitmirror serve` as a Windows service needs a wrapper such as NSSM or WinSW; it has not been
+tested.

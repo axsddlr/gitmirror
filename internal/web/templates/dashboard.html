@@ -1,0 +1,60 @@
+{{define "content"}}
+{{- $d := .Data}}
+<div class="page-head">
+  <h1>Dashboard</h1>
+  {{- if and $d.CanSync $d.Mirrors}}
+  <form method="post" action="/sync">{{template "csrf" $}}<input type="hidden" name="back" value="/"><button class="btn" type="submit">Sync everything now</button></form>
+  {{- end}}
+</div>
+{{if eq $d.Sites 0}}
+<section class="card empty">
+  <h2>Start by adding a site</h2>
+  <p>A site is a place where your code lives, such as GitHub or your own Gitea or Forgejo server. Add the site to copy from and the site to copy to.</p>
+  <p><a class="btn btn-primary" href="/sites/new">Add a site</a></p>
+</section>
+{{else if eq $d.Mirrors 0}}
+<section class="card empty">
+  <h2>Now set up your first mirror</h2>
+  <p>A mirror copies repositories from one site to another and keeps the copies up to date. gitmirror shows you what it would do before anything is saved.</p>
+  <p><a class="btn btn-primary" href="/mirrors/new">Set up a mirror</a></p>
+</section>
+{{else}}
+<ul class="stats" aria-label="Summary">
+  <li><strong>{{$d.Mirrors}}</strong> mirror{{if ne $d.Mirrors 1}}s{{end}}</li>
+  <li><strong>{{$d.Pairs}}</strong> cop{{if eq $d.Pairs 1}}y{{else}}ies{{end}}</li>
+  <li class="stat-ok"><strong>{{$d.OK}}</strong> OK</li>
+  <li class="stat-bad"><strong>{{$d.Problems}}</strong> with problems</li>
+  {{- if $d.Running}}<li><strong>{{$d.Running}}</strong> copying now</li>{{end}}
+  {{- if $d.NotCopied}}<li><strong>{{$d.NotCopied}}</strong> not copied yet</li>{{end}}
+</ul>
+{{range $d.List}}
+<section class="card mirror">
+  <div class="page-head">
+    <h2>{{.Name}} {{template "status" .Status}}</h2>
+    {{- if $d.CanSync}}
+    <form method="post" action="/mirrors/{{.Name}}/sync">{{template "csrf" $}}<input type="hidden" name="back" value="/"><button class="btn btn-small" type="submit">Sync now</button></form>
+    {{- end}}
+  </div>
+  <p class="muted">{{.From}} → {{.To}}, {{.Every}}.</p>
+  {{if .Pairs}}
+  <table class="table">
+    <thead><tr><th scope="col">Original</th><th scope="col">Copy</th><th scope="col">Status</th><th scope="col">Last copied</th><th scope="col"><span class="sr-only">Details</span></th></tr></thead>
+    <tbody>
+    {{- range .Pairs}}
+    <tr>
+      <td data-label="Original">{{if .SrcURL}}<a href="{{.SrcURL}}" rel="noreferrer">{{.Src}}</a>{{else}}{{.Src}}{{end}}</td>
+      <td data-label="Copy">{{if .DstURL}}<a href="{{.DstURL}}" rel="noreferrer">{{.Dst}}</a>{{else}}{{.Dst}}{{end}}</td>
+      <td data-label="Status">{{template "status" .Status}}{{template "problem" .Problem}}</td>
+      <td data-label="Last copied">{{if .LastAbs}}<time title="{{.LastAbs}}">{{.Last}}</time>{{else}}{{.Last}}{{end}}</td>
+      <td class="row-actions"><a href="/pair?k={{.ID}}">Details</a></td>
+    </tr>
+    {{- end}}
+    </tbody>
+  </table>
+  {{else}}
+  <p>{{template "status" .Status}} Nothing has been copied for this mirror yet{{if $d.CanSync}}; it starts on its schedule, or press Sync now{{end}}.</p>
+  {{end}}
+</section>
+{{end}}
+{{end}}
+{{end}}

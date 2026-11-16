@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"gitmirror/internal/app"
+	"gitmirror/internal/config"
 	"gitmirror/internal/resolve"
 )
 
@@ -31,6 +32,29 @@ func (s *Server) enqueueScheduled(rule string) {
 	s.mu.Unlock()
 	s.m.queue.WithLabelValues(laneScheduled).Set(float64(n))
 	wake(s.schedWake)
+}
+
+// SyncNow queues a full sync of rule in the scheduled lane, as if its
+// interval had elapsed (a rule already waiting is not queued twice). An
+// unknown rule is an error wrapping app.ErrNoMatch. Safe to call before Run;
+// the job then starts once Run does.
+func (s *Server) SyncNow(rule string) error {
+	s.init()
+	if s.App.Config().RuleOrigin(rule) == "" {
+		return fmt.Errorf("%w: unknown rule %q", app.ErrNoMatch, rule)
+	}
+	s.enqueueScheduled(rule)
+	return nil
+}
+
+// SyncAll queues a full sync of every rule in the scheduled lane (see
+// SyncNow).
+func (s *Server) SyncAll() error {
+	s.init()
+	for _, r := range s.App.Config().Rules {
+		s.enqueueScheduled(r.Name)
+	}
+	return nil
 }
 
 // queuedRules returns the scheduled lane's waiting rules in order.
@@ -150,9 +174,19 @@ func (s *Server) webhookWorker(ctx context.Context) {
 	}
 }
 
-// runJob runs one job and records its outcome.
+// runJob runs one job and records its outcome. Rules removed from the
+// configuration since the job was queued are skipped.
 func (s *Server) runJob(ctx context.Context, lane string, j Job) {
 	log := s.log().With("lane", lane, "rules", j.Rules, "repos", j.Repos)
+	if len(j.Rules) > 0 {
+		cfg := s.App.Config()
+		live := slices.DeleteFunc(slices.Clone(j.Rules), func(r string) bool { return cfg.RuleOrigin(r) == "" })
+		if len(live) == 0 {
+			log.Info("server: skipping job of removed rule(s)")
+			return
+		}
+		j.Rules = live
+	}
 	start := time.Now()
 	var res *app.SyncResult
 	var err error
@@ -191,8 +225,10 @@ func (s *Server) runJob(ctx context.Context, lane string, j Job) {
 // rememberResolve stores, per rule of a full (unfiltered) sync, the pairs
 // that resolve produced; webhooks are routed with it. Filtered syncs carry
 // only the filtered pairs, so they never update it. A rule whose resolve
-// failed or was incomplete keeps its previous pairs.
+// failed or was incomplete keeps its previous pairs. Rules removed from the
+// configuration meanwhile (the job outlived them) are not remembered.
 func (s *Server) rememberResolve(rules []string, res resolve.Result) {
+	cfg := s.App.Config()
 	by := map[string][]resolve.Pair{}
 	for _, p := range res.Pairs {
 		by[p.Rule] = append(by[p.Rule], p)
@@ -204,6 +240,9 @@ func (s *Server) rememberResolve(rules []string, res resolve.Result) {
 		failed[e.Rule] = true
 	}
 	for _, r := range rules {
+		if cfg.RuleOrigin(r) == "" {
+			continue
+		}
 		// A rule that errored or listed incompletely keeps its last good
 		// pairs, so its webhooks still route; it only gets this partial
 		// result if it has nothing better.
@@ -234,28 +273,38 @@ func (s *Server) jitter(interval time.Duration) time.Duration {
 	return time.Duration(float64(interval) * f)
 }
 
+// schedEntry is one rule's place in the schedule.
+type schedEntry struct {
+	next  time.Time
+	every time.Duration
+}
+
+func ruleInterval(r config.Rule, d config.Defaults) time.Duration {
+	if iv := r.Effective(d).Interval; iv > 0 {
+		return iv
+	}
+	return defaultInterval
+}
+
 // scheduler enqueues each rule when due (first after its initial delay,
 // then every jittered interval from that start) and prunes run history
-// daily. Times are absolute on s.Clock.
+// daily. Times are absolute on s.Clock. When the App's configuration
+// changes it reschedules (see reschedule) and forgets removed rules (see
+// applyRuleChanges).
 func (s *Server) scheduler(ctx context.Context) {
-	rules := s.App.Config.Rules
+	snap := s.App.Snapshot()
 	now := s.Clock.Now()
-	next := make([]time.Time, len(rules))
-	every := make([]time.Duration, len(rules))
-	for i, r := range rules {
-		every[i] = r.Effective(s.App.Config.Defaults).Interval
-		if every[i] <= 0 {
-			every[i] = defaultInterval
-		}
-		next[i] = now.Add(s.initialDelay(i, len(rules), every[i]))
-	}
+	sched := map[string]*schedEntry{}
+	order := s.reschedule(snap.Config, sched, now)
 	nextPrune := now.Add(pruneEvery)
+	var timer <-chan time.Time
+	var timerAt time.Time
 	for {
 		now = s.Clock.Now()
-		for i, r := range rules {
-			if !next[i].After(now) {
-				s.enqueueScheduled(r.Name)
-				next[i] = now.Add(s.jitter(every[i]))
+		for _, name := range order {
+			if e := sched[name]; !e.next.After(now) {
+				s.enqueueScheduled(name)
+				e.next = now.Add(s.jitter(e.every))
 			}
 		}
 		if !nextPrune.After(now) {
@@ -267,15 +316,105 @@ func (s *Server) scheduler(ctx context.Context) {
 			nextPrune = now.Add(pruneEvery)
 		}
 		earliest := nextPrune
-		for _, t := range next {
-			if t.Before(earliest) {
-				earliest = t
+		for _, e := range sched {
+			if e.next.Before(earliest) {
+				earliest = e.next
 			}
+		}
+		// Keep a pending timer that still matches, so a configuration
+		// change that moves nothing does not stack up timers.
+		if timer == nil || !earliest.Equal(timerAt) {
+			timer, timerAt = s.Clock.After(earliest.Sub(now)), earliest
 		}
 		select {
 		case <-s.stop:
 			return
-		case <-s.Clock.After(earliest.Sub(now)):
+		case <-snap.Changed():
+			old := snap.Config
+			snap = s.App.Snapshot()
+			order = s.reschedule(snap.Config, sched, s.Clock.Now())
+			s.applyRuleChanges(old, snap.Config)
+			if s.onReschedule != nil {
+				next := make(map[string]time.Time, len(sched))
+				for n, e := range sched {
+					next[n] = e.next
+				}
+				s.onReschedule(next)
+			}
+		case <-timer:
+			timer = nil
 		}
 	}
+}
+
+// reschedule updates sched for the rules of cfg and returns their names in
+// config order. New rules are due after the initial delay (staggered among
+// the rules added together); a rule whose interval changed runs no later
+// than one new interval from now; other rules keep their next run time.
+// Removed rules are dropped.
+func (s *Server) reschedule(cfg *config.Config, sched map[string]*schedEntry, now time.Time) []string {
+	order := make([]string, 0, len(cfg.Rules))
+	var added []string
+	for _, r := range cfg.Rules {
+		order = append(order, r.Name)
+		every := ruleInterval(r, cfg.Defaults)
+		e, ok := sched[r.Name]
+		switch {
+		case !ok:
+			sched[r.Name] = &schedEntry{every: every}
+			added = append(added, r.Name)
+		case e.every != every:
+			e.every = every
+			if n := now.Add(s.jitter(every)); n.Before(e.next) {
+				e.next = n
+			}
+		}
+	}
+	for i, name := range added {
+		e := sched[name]
+		e.next = now.Add(s.initialDelay(i, len(added), e.every))
+	}
+	for name := range sched {
+		if !slices.Contains(order, name) {
+			delete(sched, name)
+		}
+	}
+	return order
+}
+
+// applyRuleChanges reacts to a configuration change from old to cur:
+// rules that were removed leave the scheduled queue, their pending webhook
+// jobs and their remembered resolve; new rules get their metric labels.
+// Jobs already running are not affected.
+func (s *Server) applyRuleChanges(old, cur *config.Config) {
+	for _, r := range cur.Rules {
+		if old.RuleOrigin(r.Name) == "" {
+			s.m.ruleErrors.WithLabelValues(r.Name).Add(0)
+		}
+	}
+	removed := map[string]bool{}
+	for _, r := range old.Rules {
+		if cur.RuleOrigin(r.Name) == "" {
+			removed[r.Name] = true
+		}
+	}
+	if len(removed) == 0 {
+		return
+	}
+	s.mu.Lock()
+	s.schedQueue = slices.DeleteFunc(s.schedQueue, func(r string) bool { return removed[r] })
+	s.whOrder = slices.DeleteFunc(s.whOrder, func(it *whItem) bool {
+		if slices.ContainsFunc(it.job.Rules, func(r string) bool { return removed[r] }) {
+			delete(s.whPending, it.key)
+			return true
+		}
+		return false
+	})
+	for r := range removed {
+		delete(s.lastResolve, r)
+	}
+	nq, nw := len(s.schedQueue), len(s.whOrder)
+	s.mu.Unlock()
+	s.m.queue.WithLabelValues(laneScheduled).Set(float64(nq))
+	s.m.queue.WithLabelValues(laneWebhook).Set(float64(nw))
 }

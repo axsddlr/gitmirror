@@ -1,0 +1,73 @@
+{{define "layout" -}}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>{{if .Title}}{{.Title}} · {{end}}gitmirror</title>
+<link rel="stylesheet" href="/static/app.css">
+<link rel="icon" href="data:,">
+</head>
+<body>
+<a class="skip" href="#main">Skip to main content</a>
+<header class="top">
+  <div class="wrap top-inner">
+    <a class="brand" href="/">gitmirror</a>
+    {{- if .SignedIn}}
+    <nav class="nav" aria-label="Main">
+      <ul>
+        {{- range .NavItems}}
+        <li><a href="{{.Path}}"{{if .Active}} aria-current="page"{{end}}>{{.Label}}</a></li>
+        {{- end}}
+      </ul>
+    </nav>
+    <form class="signout" method="post" action="/logout">
+      {{template "csrf" .}}
+      <span class="who">Signed in as admin</span>
+      <button type="submit" class="btn btn-quiet">Sign out</button>
+    </form>
+    {{- end}}
+  </div>
+</header>
+<main id="main" class="wrap" tabindex="-1">
+  {{- range .Flashes}}
+  <div class="flash flash-{{.Kind}}" role="{{if eq .Kind "error"}}alert{{else}}status{{end}}">{{.Message}}</div>
+  {{- end}}
+  {{template "content" .}}
+</main>
+<footer class="wrap foot">gitmirror copies your repositories from one site to another, one way.</footer>
+</body>
+</html>
+{{- end}}
+
+{{/* csrf is the hidden security field every POST form needs. Pass the
+     root data: {{template "csrf" $}} (or "." at the top level). */}}
+{{define "csrf"}}<input type="hidden" name="csrf" value="{{.CSRF}}">{{end}}
+
+{{/* formerror shows the message above a form. Pass .Form. */}}
+{{define "formerror"}}{{if .}}{{if or .Message .Errors}}
+<div class="form-error" role="alert">
+  <p>{{if .Message}}{{.Message}}{{else}}Please check the highlighted fields below.{{end}}</p>
+</div>
+{{end}}{{end}}{{end}}
+
+{{/* field is a labelled input with hint and error.
+     {{template "field" (field .Form "name" "Label" "text" "autocomplete" "hint")}} */}}
+{{define "field"}}
+<div class="field{{if .Error}} has-error{{end}}">
+  <label for="{{.Name}}">{{.Label}}</label>
+  {{- if .Hint}}<p class="hint" id="{{.Name}}-hint">{{.Hint}}</p>{{end}}
+  {{- if .Error}}<p class="error" id="{{.Name}}-error">{{.Error}}</p>{{end}}
+  <input id="{{.Name}}" name="{{.Name}}" type="{{.Type}}" value="{{.Value}}"
+    {{- if .Autocomplete}} autocomplete="{{.Autocomplete}}"{{end}}
+    {{- if .Error}} aria-invalid="true"{{end}}
+    {{- if or .Hint .Error}} aria-describedby="{{if .Hint}}{{.Name}}-hint{{end}}{{if and .Hint .Error}} {{end}}{{if .Error}}{{.Name}}-error{{end}}"{{end}}{{if not .Optional}} required{{end}}>
+</div>
+{{end}}
+
+{{/* status is a statusView: icon and words, coloured by class. */}}
+{{define "status"}}<span class="status status-{{.Class}}"><span aria-hidden="true">{{.Icon}}</span> {{.Label}}</span>{{end}}
+
+{{/* problem is a *problem: plain words plus the technical text on demand. */}}
+{{define "problem"}}{{if .}}<div class="problem"><p>{{.Text}}</p>{{if .Detail}}<details><summary>Technical details</summary><pre>{{.Detail}}</pre></details>{{end}}</div>{{end}}{{end}}

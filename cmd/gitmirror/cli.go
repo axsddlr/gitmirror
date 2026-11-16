@@ -6,11 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
+	"os"
 	"strings"
 	"sync"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	"gitmirror/internal/app"
 	"gitmirror/internal/config"
@@ -88,9 +91,13 @@ func (r *redactor) Write(p []byte) (int, error) {
 
 type cli struct {
 	configPath string
-	logLevel   string
-	logFormat  string
-	json       bool
+	// configExplicit is set when the config path came from GITMIRROR_CONFIG;
+	// configFlag reports whether -c/--config was given.
+	configExplicit bool
+	configFlag     *pflag.Flag
+	logLevel       string
+	logFormat      string
+	json           bool
 
 	out, errw *redactor
 	env       func(string) (string, bool)
@@ -139,13 +146,16 @@ func (c *cli) root() *cobra.Command {
 	def := "config.yaml"
 	if v, ok := c.env("GITMIRROR_CONFIG"); ok && v != "" {
 		def = v
+		c.configExplicit = true
 	}
 	f := root.PersistentFlags()
-	f.StringVarP(&c.configPath, "config", "c", def, "path to the config file (env GITMIRROR_CONFIG)")
+	f.StringVarP(&c.configPath, "config", "c", def, "path to the config file (env GITMIRROR_CONFIG); "+
+		"without it a missing config.yaml means built-in defaults")
+	c.configFlag = f.Lookup("config")
 	f.StringVar(&c.logLevel, "log-level", "info", "log level: debug, info, warn, error")
 	f.StringVar(&c.logFormat, "log-format", "text", "log format: text or json")
 	f.BoolVar(&c.json, "json", false, "machine-readable JSON output on stdout")
-	root.AddCommand(c.syncCmd(), c.planCmd(), c.serveCmd(), c.validateCmd(), c.statusCmd(), c.versionCmd())
+	root.AddCommand(c.syncCmd(), c.planCmd(), c.serveCmd(), c.validateCmd(), c.statusCmd(), c.versionCmd(), c.resetAdminCmd())
 	return root
 }
 
@@ -196,20 +206,59 @@ func flatten(err error) []string {
 	return out
 }
 
-// loadConfig reads the config and registers its secrets with the output
-// redactors. On failure it returns the load error unprinted.
+// loadConfig reads the config file and registers its secrets with the
+// output redactors. On failure it returns the load error unprinted.
+//
+// The config file is optional: when no path was given (neither -c/--config
+// nor GITMIRROR_CONFIG) and the default config.yaml does not exist, the
+// built-in defaults are used (as for an empty file, GITMIRROR_STATE_DIR
+// included); forges and rules can then come from the web UI. An explicitly
+// given path must exist.
 func (c *cli) loadConfig() (*config.Config, error) {
-	cfg, err := config.Load(c.configPath)
+	explicit := c.configExplicit || c.configFlag != nil && c.configFlag.Changed
+	var cfg *config.Config
+	var err error
+	if _, serr := os.Stat(c.configPath); !explicit && errors.Is(serr, fs.ErrNotExist) {
+		cfg, err = config.Parse(nil, os.LookupEnv, os.ReadFile)
+	} else {
+		cfg, err = config.Load(c.configPath)
+	}
 	if err != nil {
 		return nil, err
 	}
 	for _, f := range cfg.Forges {
-		c.out.add(f.Token)
-		c.errw.add(f.Token)
+		c.addSecrets(f.Token)
 	}
-	c.out.add(cfg.Server.WebhookSecret)
-	c.errw.add(cfg.Server.WebhookSecret)
+	c.addSecrets(cfg.Server.WebhookSecret)
 	return cfg, nil
+}
+
+// addSecrets masks secrets in everything written to stdout and stderr.
+func (c *cli) addSecrets(secrets ...string) {
+	c.out.add(secrets...)
+	c.errw.add(secrets...)
+}
+
+// options returns appOptions() with the command's logger and the output
+// redaction of every effective forge token (web UI tokens included).
+func (c *cli) options() app.Options {
+	o := appOptions()
+	o.Logger = c.logger
+	o.Redact = c.addSecrets
+	return o
+}
+
+// buildError maps an app.Build error to an exit error: an invalid
+// effective configuration is a configuration error (problems printed one
+// per line), anything else a fatal runtime error.
+func (c *cli) buildError(err error) error {
+	if errors.Is(err, app.ErrConfig) {
+		for _, l := range flatten(err) {
+			fmt.Fprintf(c.errw, "gitmirror: config: %s\n", l)
+		}
+		return &exitError{code: exitUsage}
+	}
+	return &exitError{exitFailed, err}
 }
 
 // loadConfigOrExit is loadConfig for commands that treat a bad config as a

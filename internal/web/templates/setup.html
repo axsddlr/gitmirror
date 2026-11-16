@@ -1,0 +1,16 @@
+{{define "content"}}
+<div class="narrow">
+<h1>Welcome to gitmirror</h1>
+<p class="lead">Before you start, choose a password for this page. You only need to do this once.</p>
+<section class="card">
+  <form method="post" action="/setup">
+    {{template "csrf" .}}
+    {{template "formerror" .Form}}
+    {{template "field" (field .Form "code" "Setup code" "text" "one-time-code" "To prove you run this gitmirror, enter the setup code from the gitmirror log. Look for the line that starts with “web UI setup”. It looks like ABCD-EFGH-JKMN.")}}
+    {{template "field" (field .Form "password" "New password" "password" "new-password" "At least 12 characters. A few words in a row are easy to remember and hard to guess.")}}
+    {{template "field" (field .Form "confirm" "Type the password again" "password" "new-password")}}
+    <button class="btn btn-primary" type="submit">Save password and continue</button>
+  </form>
+</section>
+</div>
+{{end}}
