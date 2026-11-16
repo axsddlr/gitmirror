@@ -405,3 +405,74 @@ func (h *harness) admin2() *client {
 	}
 	return c
 }
+
+// Copying into the source account under the same names is caught when
+// leaving step 3, not only on Preview (owner and pick modes, and a custom
+// name equal to the original's).
+func TestWizardSelfCopyCaughtOnStep3(t *testing.T) {
+	w := newWorld(t, "")
+	w.addSites()
+	w.addRepo(w.gh.Provider, "alice", "one")
+	c := w.admin()
+	for _, tc := range []struct {
+		mode, naming, dstname, field string
+	}{
+		{"pick", "same", "", "dstowner"},
+		{"owner", "same", "", "dstowner"},
+		{"pick", "custom", "ONE", "dstname"},
+	} {
+		repos := startWizard(t, c, "github", tc.mode)
+		var to resp
+		if tc.mode == "pick" {
+			to = c.next(repos, "next", url.Values{"repo": {"one"}})
+		} else {
+			to = c.next(repos, "next", nil)
+		}
+		mustContain(t, to, "Step 3 of 5: Copy to")
+		r := c.next(to, "next", url.Values{"dst": {"github"}, "dstowner": {""}, "naming": {tc.naming}, "dstname": {tc.dstname}})
+		if r.code != http.StatusBadRequest {
+			t.Fatalf("%+v: step 3 next = %d, want 400", tc, r.code)
+		}
+		mustContain(t, r, "The original and the copy would be the same repository", "Step 3 of 5: Copy to", `id="`+tc.field+`-error"`)
+	}
+
+	// Other names, or another account on the same site, are fine.
+	repos := startWizard(t, c, "github", "pick")
+	to := c.next(repos, "next", url.Values{"repo": {"one"}})
+	for _, v := range []url.Values{
+		{"dst": {"github"}, "dstowner": {""}, "naming": {"prefix"}},
+		{"dst": {"github"}, "dstowner": {"backups"}, "naming": {"same"}},
+		{"dst": {"github"}, "dstowner": {""}, "naming": {"custom"}, "dstname": {"one-copy"}},
+	} {
+		if r := c.next(to, "next", v); r.code != http.StatusOK || !strings.Contains(r.body, "Step 4 of 5: Options") {
+			t.Fatalf("%v: got %d\n%.2000s", v, r.code, r.body)
+		}
+	}
+}
+
+// When every matching repository would be skipped, the preview says so and
+// Save is disabled; a normal preview keeps Save enabled.
+func TestWizardSaveDisabledWhenNothingCanBeCopied(t *testing.T) {
+	w := newWorld(t, "")
+	w.addSites()
+	w.addRepo(w.gh.Provider, "alice", "one")
+	w.addRepo(w.gh.Provider, "bob", "one")
+	// Another mirror already writes carol/one, so a second one is skipped.
+	w.putRule(config.Rule{Name: "first", From: config.Source{Forge: "github", Repo: "bob/one"}, To: config.Dest{Forge: "git-example-com", Repo: "carol/one"}})
+	c := w.admin()
+	f := url.Values{"step": {"options"}, "src": {"github"}, "mode": {"owner"}, "account": {"alice"},
+		"dst": {"git-example-com"}, "dstowner": {"carol"}, "naming": {"same"}, "visibility": {"private"}, "interval": {"1h"},
+		"name": {"second"}, "optsset": {"1"}, "filterset": {"1"}}
+	r := c.postForm("/mirrors/new", "/mirrors/wizard", withGo(f, "preview"))
+	if r.code != http.StatusOK {
+		t.Fatalf("preview = %d\n%.3000s", r.code, r.body)
+	}
+	mustContain(t, r, "Will be skipped", "None of these repositories can be copied", `value="save" disabled`)
+
+	f.Set("dstowner", "dave")
+	r = c.postForm("/mirrors/new", "/mirrors/wizard", withGo(f, "preview"))
+	mustContain(t, r, "Will be created", "Save mirror")
+	if strings.Contains(r.body, `value="save" disabled`) || strings.Contains(r.body, "None of these repositories can be copied") {
+		t.Fatalf("save disabled on a good preview:\n%.3000s", r.body)
+	}
+}

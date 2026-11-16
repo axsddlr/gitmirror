@@ -185,8 +185,9 @@
   <p>No repositories match right now, so nothing would be copied yet. Repositories that appear later are copied on the schedule.</p>
   {{end}}
   {{end}}
+  {{if and $v.Preview $v.Preview.NothingToCopy}}<p class="error" id="save-blocked">None of these repositories can be copied, so this mirror would do nothing. Go back and change the destination.</p>{{end}}
   <div class="actions">
-    <button class="btn btn-primary" type="submit" name="go" value="save">Save mirror</button>
+    <button class="btn btn-primary" type="submit" name="go" value="save"{{if and $v.Preview $v.Preview.NothingToCopy}} disabled aria-describedby="save-blocked"{{end}}>Save mirror</button>
     <button class="btn" type="submit" name="go" value="back" formnovalidate>Back</button>
   </div>
 {{end}}

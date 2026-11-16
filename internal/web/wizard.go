@@ -250,6 +250,35 @@ func (u *UI) checkTo(ctx context.Context, snap *app.Snapshot, w *wizard, f *Form
 	default:
 		f.SetError("naming", "Choose how the copies are named.")
 	}
+	if f.Errors["dstowner"] == "" && f.Errors["dstname"] == "" && w.selfCopy() {
+		key := "dstowner"
+		if w.Naming == namingCustom {
+			key = "dstname"
+		}
+		f.SetError(key, "The original and the copy would be the same repository. Choose another destination account or site.")
+	}
+}
+
+// selfCopy reports whether the chosen destination is the source itself, so
+// every copy would be its own original (the same check the sync engine
+// makes, by site name). Starred mirrors are left to that check, because
+// their repositories belong to many owners.
+func (w *wizard) selfCopy() bool {
+	if w.Src != w.Dst || !strings.EqualFold(w.Account, w.DstOwner) {
+		return false
+	}
+	switch w.Mode {
+	case modePick, modeOwner:
+	default:
+		return false
+	}
+	switch w.Naming {
+	case namingSame:
+		return true
+	case namingCustom:
+		return len(w.Picked) == 1 && strings.EqualFold(w.Picked[0], w.DstName)
+	}
+	return false
 }
 
 func (u *UI) checkOptions(cfg *config.Config, w *wizard, f *Form) {
@@ -489,6 +518,8 @@ type repoChoice struct {
 type previewRow struct {
 	Src, Dst, Outcome, Detail string
 	Status                    statusView
+	// Blocked marks a row that will be skipped or cannot be copied.
+	Blocked bool
 }
 
 type previewView struct {
@@ -496,6 +527,9 @@ type previewView struct {
 	Problems []string
 	// More counts the repositories beyond app.PreviewLimit, not listed.
 	More int
+	// NothingToCopy is set when repositories match but every one of them
+	// would be skipped or fail, so saving would copy nothing.
+	NothingToCopy bool
 }
 
 type wizardView struct {
@@ -843,6 +877,7 @@ func (u *UI) preview(w http.ResponseWriter, r *http.Request, f *Form, wz *wizard
 			p := explain(msg)
 			row.Status, row.Outcome, row.Detail = stFailed, "Will not be copied. "+p.Text, p.Detail
 			row.Status.Label = "Conflict"
+			row.Blocked = true
 		case strings.Contains(acts, "adopt existing repository"):
 			row.Status, row.Outcome = stPartial, "The repository already exists there; its content will be replaced to match the original."
 			row.Status.Label = "Replaces existing"
@@ -862,7 +897,7 @@ func (u *UI) preview(w http.ResponseWriter, r *http.Request, f *Form, wz *wizard
 		pv.Rows = append(pv.Rows, row)
 	}
 	for _, p := range res.Resolve.Dropped {
-		row := previewRow{Src: p.SrcForge + ": " + p.Src.FullName(), Dst: p.DstForge + ": " + p.DstFullName(), Status: stStopped}
+		row := previewRow{Src: p.SrcForge + ": " + p.Src.FullName(), Dst: p.DstForge + ": " + p.DstFullName(), Status: stStopped, Blocked: true}
 		row.Status.Label = "Will be skipped"
 		for i, e := range res.Resolve.Errors {
 			if strings.Contains(e.Err.Error(), p.Src.FullName()) {
@@ -880,6 +915,13 @@ func (u *UI) preview(w http.ResponseWriter, r *http.Request, f *Form, wz *wizard
 		}
 	}
 	pv.More = max(len(res.Resolve.Pairs)-len(res.Reports), 0)
+	copyable := pv.More
+	for _, row := range pv.Rows {
+		if !row.Blocked {
+			copyable++
+		}
+	}
+	pv.NothingToCopy = len(pv.Rows) > 0 && copyable == 0
 	u.renderWizardWith(w, r, f, wz, stepPreview, 0, pv)
 }
 
