@@ -65,8 +65,7 @@ changelog:
       - '^ci(\(.+\))?:'
       - "^Merge "
 
-# Container images. REPLACE `OWNER` with your GitHub user or organisation
-# (must be lower case for ghcr.io).
+# Container images (ghcr.io names must be lower case).
 dockers:
   - id: linux-amd64
     goos: linux
@@ -75,13 +74,13 @@ dockers:
     dockerfile: deploy/Dockerfile.goreleaser
     use: buildx
     image_templates:
-      - "ghcr.io/OWNER/gitmirror:{{ .Version }}-amd64"
+      - "ghcr.io/axsddlr/gitmirror:{{ .Version }}-amd64"
     build_flag_templates:
       - "--platform=linux/amd64"
       - "--label=org.opencontainers.image.title=gitmirror"
       - "--label=org.opencontainers.image.version={{ .Version }}"
       - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
-      - "--label=org.opencontainers.image.source=https://github.com/OWNER/gitmirror"
+      - "--label=org.opencontainers.image.source=https://github.com/axsddlr/gitmirror"
   - id: linux-arm64
     goos: linux
     goarch: arm64
@@ -89,27 +88,27 @@ dockers:
     dockerfile: deploy/Dockerfile.goreleaser
     use: buildx
     image_templates:
-      - "ghcr.io/OWNER/gitmirror:{{ .Version }}-arm64"
+      - "ghcr.io/axsddlr/gitmirror:{{ .Version }}-arm64"
     build_flag_templates:
       - "--platform=linux/arm64"
       - "--label=org.opencontainers.image.title=gitmirror"
       - "--label=org.opencontainers.image.version={{ .Version }}"
       - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
-      - "--label=org.opencontainers.image.source=https://github.com/OWNER/gitmirror"
+      - "--label=org.opencontainers.image.source=https://github.com/axsddlr/gitmirror"
 
 docker_manifests:
-  - name_template: "ghcr.io/OWNER/gitmirror:{{ .Version }}"
+  - name_template: "ghcr.io/axsddlr/gitmirror:{{ .Version }}"
     image_templates:
-      - "ghcr.io/OWNER/gitmirror:{{ .Version }}-amd64"
-      - "ghcr.io/OWNER/gitmirror:{{ .Version }}-arm64"
-  - name_template: "ghcr.io/OWNER/gitmirror:latest"
+      - "ghcr.io/axsddlr/gitmirror:{{ .Version }}-amd64"
+      - "ghcr.io/axsddlr/gitmirror:{{ .Version }}-arm64"
+  - name_template: "ghcr.io/axsddlr/gitmirror:latest"
     skip_push: auto   # not for prereleases
     image_templates:
-      - "ghcr.io/OWNER/gitmirror:{{ .Version }}-amd64"
-      - "ghcr.io/OWNER/gitmirror:{{ .Version }}-arm64"
+      - "ghcr.io/axsddlr/gitmirror:{{ .Version }}-amd64"
+      - "ghcr.io/axsddlr/gitmirror:{{ .Version }}-arm64"
 
 release:
   github:
-    owner: OWNER      # REPLACE: GitHub user or organisation
+    owner: axsddlr
     name: gitmirror
   prerelease: auto

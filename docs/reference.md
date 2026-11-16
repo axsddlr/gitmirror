@@ -137,7 +137,7 @@ validate` checks both.
 ### Docker
 
 ```sh
-docker build -t gitmirror .          # or: docker pull ghcr.io/OWNER/gitmirror:latest
+docker build -t gitmirror .          # or: docker pull ghcr.io/axsddlr/gitmirror:main
 docker run -d --name gitmirror --restart unless-stopped \
   --stop-timeout 660 \
   -p 8080:8080 -p 127.0.0.1:8090:8090 \
@@ -171,7 +171,13 @@ work too: `docker run --rm ... gitmirror plan`.
 the source (`docker compose up -d --build`) and runs it with a data volume, the web UI published on
 `127.0.0.1:8090`, webhooks on `8080`, `restart: unless-stopped`, a long `stop_grace_period` and a
 healthcheck. The host ports can be changed with `GITMIRROR_UI_PORT` and `GITMIRROR_WEBHOOK_PORT`
-(environment or a `.env` file). A config bind mount and Docker `secrets:` mapped to `token_file` are included as
+(environment or a `.env` file).
+
+[`deploy/compose.ghcr.yml`](../deploy/compose.ghcr.yml) runs the published image
+`ghcr.io/axsddlr/gitmirror:main` instead, with no source code needed: use it on a server, a
+Raspberry Pi (arm64 and 32-bit arm/v7 images are published) or in a stack manager such as Dockhand.
+CI publishes that image after every passing build of `main`, also tagged `sha-<commit>` for
+pinning. `GITMIRROR_UI_BIND` (default `127.0.0.1`) controls where the web pages listen. A config bind mount and Docker `secrets:` mapped to `token_file` are included as
 commented "advanced" options. It also contains a commented Gitea service for local trials.
 
 ### systemd

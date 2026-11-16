@@ -1,0 +1,56 @@
+# gitmirror from the published image, for a server or a Raspberry Pi
+# (Dockhand, Portainer, plain `docker compose`). No source code needed:
+#
+#   docker compose -f compose.ghcr.yml up -d
+#   docker compose -f compose.ghcr.yml logs gitmirror   # one-time web UI setup code
+#
+# In Dockhand, create a stack and paste this file. The setup code is in the
+# container's log.
+#
+# The image is built for amd64, arm64 (64-bit Raspberry Pi OS) and arm/v7
+# (32-bit Raspberry Pi OS); Docker picks the right one. Tags:
+#   :main         newest build of the main branch
+#   :sha-<commit> one exact build, to pin a version
+#
+# If the image package on GitHub is private, log the server in to ghcr.io once
+# with a GitHub token that has the read:packages scope (in Dockhand: add
+# ghcr.io as a registry with your GitHub user name and that token):
+#   echo <token> | docker login ghcr.io -u <github user> --password-stdin
+#
+# Settings (environment variables or a .env file next to this one):
+#   GITMIRROR_UI_BIND=127.0.0.1   where the web pages listen. 127.0.0.1 means
+#                                 only the server itself; set 0.0.0.0 to open
+#                                 them from other computers on your network.
+#                                 Use that only on a home network you trust, or
+#                                 put an HTTPS reverse proxy in front instead.
+#   GITMIRROR_UI_PORT=8090        web pages
+#   GITMIRROR_WEBHOOK_PORT=8080   webhooks, /healthz, /readyz
+#
+# Everything you set up is kept in the gitmirror-data volume (back it up; it
+# holds secret.key, which unlocks the saved tokens). To update: pull the image
+# again and recreate the container (in Dockhand: redeploy with "pull").
+services:
+  gitmirror:
+    image: ghcr.io/axsddlr/gitmirror:main
+    restart: unless-stopped
+    command: ["serve"]
+    environment:
+      GITMIRROR_STATE_DIR: /data
+      GITMIRROR_UI_LISTEN: ":8090"
+    ports:
+      - "${GITMIRROR_WEBHOOK_PORT:-8080}:8080"
+      - "${GITMIRROR_UI_BIND:-127.0.0.1}:${GITMIRROR_UI_PORT:-8090}:8090"
+      # Do NOT publish 9090: /metrics is unauthenticated.
+    volumes:
+      - gitmirror-data:/data
+    # Running syncs may take up to 10 minutes to finish after a stop.
+    stop_grace_period: 11m
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  gitmirror-data:
