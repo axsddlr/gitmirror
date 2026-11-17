@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -12,6 +13,10 @@ import (
 	"gitmirror/internal/server"
 	"gitmirror/internal/web"
 )
+
+// resetAdminEnv lets a stack manager such as Dockhand reset a forgotten web UI
+// password without a shell: set it to a new value and restart serve.
+const resetAdminEnv = "GITMIRROR_RESET_ADMIN"
 
 func (c *cli) serveCmd() *cobra.Command {
 	var lockTimeout, shutdownTimeout time.Duration
@@ -43,6 +48,19 @@ On SIGINT/SIGTERM it stops scheduling, lets running syncs finish for up to
 				c.logger.Warn(config.ErrNoRules.Error() + "; idling until rules are added")
 			}
 			defer a.Close()
+			if tok, ok := c.env(resetAdminEnv); ok {
+				reset, err := web.ResetAdminOnce(cmd.Context(), a.Store, tok)
+				if err != nil {
+					return &exitError{exitFailed, fmt.Errorf("%s: %w", resetAdminEnv, err)}
+				}
+				if reset {
+					c.logger.Warn(resetAdminEnv + " is set: the web UI password was removed and everyone was signed out. " +
+						"Choose a new password with the setup code below. This value is now used up; leaving it set does not reset again " +
+						"(set a different value to reset again).")
+				} else if v := strings.TrimSpace(tok); v != "" && v != "0" && !strings.EqualFold(v, "false") {
+					c.logger.Info(resetAdminEnv + " value already used, so the web UI password was not reset again; set a different value to reset again, or remove it")
+				}
+			}
 			ln, err := net.Listen("tcp", cfg.Server.Listen)
 			if err != nil {
 				return &exitError{exitFailed, fmt.Errorf("listen on %s: %w", cfg.Server.Listen, err)}

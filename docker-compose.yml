@@ -30,6 +30,11 @@
 #                                 trust, or put an HTTPS reverse proxy (Caddy,
 #                                 nginx, Traefik) in front instead.
 #   GITMIRROR_WEBHOOK_PORT=8080   webhooks, /healthz, /readyz
+#   GITMIRROR_RESET_ADMIN=        forgot the web password? Set it to a value you
+#                                 have not used before (1, then 2 next time...)
+#                                 and redeploy: the password is removed and the
+#                                 log shows a new setup code. Each value works
+#                                 once, so leaving it set is harmless.
 # For example: GITMIRROR_WEBHOOK_PORT=8085 docker compose up -d
 # Behind a proxy, set the "Public address" on the Webhooks page to the proxy's
 # https:// URL for the webhook port.
@@ -58,6 +63,8 @@ services:
     environment:
       GITMIRROR_STATE_DIR: /data     # also set in the image; overrides state_dir in config.yaml
       GITMIRROR_UI_LISTEN: ":8090"   # also set in the image; overrides server.ui_listen
+                                     # (port inside the container: change GITMIRROR_UI_PORT, not this)
+      GITMIRROR_RESET_ADMIN: "${GITMIRROR_RESET_ADMIN:-}"   # forgotten password: see the top of this file
     ports:
       - "${GITMIRROR_WEBHOOK_PORT:-8080}:8080"                              # webhooks
       - "${GITMIRROR_UI_BIND:-127.0.0.1}:${GITMIRROR_UI_PORT:-8090}:8090"   # web UI

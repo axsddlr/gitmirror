@@ -93,7 +93,10 @@ calls forges **sites** and rules **mirrors**.
   it there"). See [configuration.md](configuration.md).
 * **Forgotten password.** Stop `serve`, run `gitmirror reset-admin` (same config and state dir),
   start `serve` again and use the new setup code. Sites, mirrors and history are kept; every
-  session is signed out.
+  session is signed out. Without a shell (Dockhand, Portainer), set `GITMIRROR_RESET_ADMIN` to a
+  value not used before and restart: `serve` does the same reset at startup, before the web UI
+  starts. Each value is acted on once (its SHA-256 is stored), so a value left set does not reset
+  again; `0`, `false` or empty mean off.
 
 Security model:
 
@@ -417,7 +420,8 @@ Not yet confirmed: whether GitHub rejects a push that touches `.github/workflows
   restart creates a new one.
 * **"Too many wrong attempts."** Wait 15 minutes, then try again.
 * **Forgotten web UI password.** Stop `serve`, run `gitmirror reset-admin`, start `serve` and use the
-  new setup code.
+  new setup code. Or set `GITMIRROR_RESET_ADMIN` to a new value (`1`, then `2` next time) and
+  restart.
 * **A site's token cannot be decrypted at start.** `state.db` was restored or moved without its
   `secret.key`. Restore the matching `secret.key` into the state dir.
 * **"destination ... already exists and was not created by gitmirror"**: the destination repo exists

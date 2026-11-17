@@ -420,6 +420,12 @@ database is updated automatically on start.
 
 Your sites, mirrors and copies are kept. Everyone who was signed in is signed out.
 
+**Without a command line** (Dockhand, Portainer, or any setup where you can only change the
+container's settings): set `GITMIRROR_RESET_ADMIN` to a value you have not used before, such as
+`1`, and redeploy. gitmirror removes the password when it starts and writes a new setup code to
+the log. Each value works only once, so leaving it set does not reset the new password again; next
+time, use `2`.
+
 ## 13. When something goes wrong
 
 * The **Dashboard** and its **Details** pages explain most problems in plain words.
