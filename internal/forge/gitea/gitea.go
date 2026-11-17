@@ -578,14 +578,16 @@ func (p *Provider) EnsureOrg(ctx context.Context, name string) error {
 }
 
 // isOrgRace reports whether err is Gitea's UNIQUE-constraint 500 from two
-// concurrent organisation inserts of the same name.
+// concurrent organisation inserts of the same name. Depending on the version
+// and database, Gitea names the user.name or the user.lower_name column.
 func isOrgRace(err error) bool {
 	var ae *apiError
 	if !errors.As(err, &ae) || ae.status != http.StatusInternalServerError {
 		return false
 	}
 	m := strings.ToLower(ae.message)
-	return strings.Contains(m, "unique constraint") && strings.Contains(m, "user.name")
+	return strings.Contains(m, "unique constraint") &&
+		(strings.Contains(m, "user.name") || strings.Contains(m, "user.lower_name"))
 }
 
 // ---- releases ----

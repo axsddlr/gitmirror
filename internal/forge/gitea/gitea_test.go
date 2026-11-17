@@ -1170,6 +1170,30 @@ func TestEnsureOrgRaceThenExists(t *testing.T) {
 	}
 }
 
+// Gitea 28 reports the same race on the lower_name column.
+func TestEnsureOrgRaceOnLowerNameThenExists(t *testing.T) {
+	instantBackoff(t)
+	posts := 0
+	mux := orgMux(t, &posts,
+		func(w http.ResponseWriter, r *http.Request) {
+			msg(w, 500, "insert organization: constraint failed: UNIQUE constraint failed: user.lower_name (2067)")
+		},
+		func(w http.ResponseWriter, r *http.Request) {
+			if posts > 0 {
+				writeJSON(w, 200, map[string]any{})
+				return
+			}
+			msg(w, 404, "nope")
+		})
+	srv, _ := serve(t, mux)
+	if err := newProv(t, srv.URL).EnsureOrg(ctx(), "mirrors"); err != nil {
+		t.Fatal(err)
+	}
+	if posts != 1 {
+		t.Errorf("posts = %d, want 1", posts)
+	}
+}
+
 func TestEnsureOrgPersistentRaceIsBounded(t *testing.T) {
 	delays := instantBackoff(t)
 	posts := 0
