@@ -1,25 +1,38 @@
-# gitmirror with Docker Compose. Run these in this folder:
+# gitmirror with Docker Compose, using the published image
+# ghcr.io/axsddlr/gitmirror (amd64, arm64 and arm/v7, so it also runs on a
+# Raspberry Pi). Run these in this folder:
 #
-#   docker compose up -d --build
+#   docker compose pull
+#   docker compose up -d
 #   docker compose logs gitmirror      # shows the one-time web UI setup code
+#
+# In Dockhand or Portainer, create a stack and paste this file.
 #
 # Then open http://localhost:8090, enter the setup code, choose a password and
 # add your sites and mirrors in the browser. No config file is needed. Everything
 # you set up is kept in the gitmirror-data volume (back it up; it holds
 # secret.key, which unlocks the saved tokens).
 #
-# Ports on this computer. Change them when 8090 or 8080 is already taken, either
-# in a .env file next to this one or on the command line:
-#   GITMIRROR_UI_PORT=8090        web pages (only reachable from this computer)
+# The image is public; no registry login is needed. Image tags:
+#   :main         newest build of the main branch
+#   :sha-<commit> one exact build, to pin a version
+# Update: docker compose pull && docker compose up -d (in Dockhand: redeploy
+# with "pull").
+#
+# Build from this source code instead of pulling:
+#   docker compose -f docker-compose.yml -f compose.build.yml up -d --build
+#
+# Settings, in a .env file next to this one or on the command line:
+#   GITMIRROR_UI_PORT=8090        web pages
+#   GITMIRROR_UI_BIND=127.0.0.1   where the web pages listen. 127.0.0.1 means only
+#                                 this computer; 0.0.0.0 opens them to your
+#                                 network. Use that only on a home network you
+#                                 trust, or put an HTTPS reverse proxy (Caddy,
+#                                 nginx, Traefik) in front instead.
 #   GITMIRROR_WEBHOOK_PORT=8080   webhooks, /healthz, /readyz
-# For example: GITMIRROR_WEBHOOK_PORT=8085 docker compose up -d --build
-#
-# To use the web pages from other machines, put an HTTPS reverse proxy (Caddy,
-# nginx, Traefik) in front of the web UI port instead of publishing it on all
-# interfaces, and set the "Public address" on the Webhooks page to the proxy's
+# For example: GITMIRROR_WEBHOOK_PORT=8085 docker compose up -d
+# Behind a proxy, set the "Public address" on the Webhooks page to the proxy's
 # https:// URL for the webhook port.
-#
-# Update to newer code: git pull, then docker compose up -d --build.
 #
 # Advanced: configure with a file. Uncomment the config.yaml mount and, if you
 # keep tokens in files, the secrets below:
@@ -39,18 +52,15 @@
 # chown 10001 on the host. The image runs as non-root uid/gid 10001.
 services:
   gitmirror:
-    build:
-      context: .
-      args: { VERSION: compose }
-    image: gitmirror:local
+    image: ghcr.io/axsddlr/gitmirror:main
     restart: unless-stopped
     command: ["serve"]
     environment:
       GITMIRROR_STATE_DIR: /data     # also set in the image; overrides state_dir in config.yaml
       GITMIRROR_UI_LISTEN: ":8090"   # also set in the image; overrides server.ui_listen
     ports:
-      - "${GITMIRROR_WEBHOOK_PORT:-8080}:8080"         # webhooks. Put a TLS reverse proxy in front.
-      - "127.0.0.1:${GITMIRROR_UI_PORT:-8090}:8090"    # web UI, reachable only from this computer
+      - "${GITMIRROR_WEBHOOK_PORT:-8080}:8080"                              # webhooks
+      - "${GITMIRROR_UI_BIND:-127.0.0.1}:${GITMIRROR_UI_PORT:-8090}:8090"   # web UI
       # Do NOT publish 9090: /metrics is unauthenticated. Set `server.metrics_listen: ":9090"`
       # in config.yaml and scrape it from another container on the same Docker network.
     volumes:
@@ -71,7 +81,7 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 10s
+      start_period: 20s
 
   # Optional: a throw-away Gitea to try gitmirror against. Uncomment it and the
   # gitea-data volume, run `docker compose up -d`, create a user and a token at

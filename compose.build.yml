@@ -1,0 +1,12 @@
+# Build gitmirror from this source code instead of pulling the published image:
+#
+#   docker compose -f docker-compose.yml -f compose.build.yml up -d --build
+#
+# Update after changing or pulling the code: run the same command again.
+services:
+  gitmirror:
+    build:
+      context: .
+      args: { VERSION: compose }
+    image: gitmirror:local
+    pull_policy: build

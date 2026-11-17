@@ -106,17 +106,22 @@ Always start it from the same folder. Leave the window open; Ctrl+C stops it.
 In the folder you downloaded gitmirror into:
 
 ```sh
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 docker compose logs gitmirror
 ```
 
-Compose builds gitmirror from the code you downloaded. It publishes the web pages on
+Compose pulls the published image `ghcr.io/axsddlr/gitmirror:main`, which also runs on a Raspberry
+Pi; it is public, so no login is needed. In Dockhand or Portainer, paste `docker-compose.yml` into
+a new stack. It publishes the web pages on
 `127.0.0.1:8090`, so only this computer can open them, and webhooks on port `8080`. If either port
 is already used on your computer, pick others, for example
-`GITMIRROR_UI_PORT=8091 GITMIRROR_WEBHOOK_PORT=8085 docker compose up -d --build`, or put those two
-lines in a `.env` file next to `docker-compose.yml`.
-Everything you set up is kept in the `gitmirror-data` volume. To update later: `git pull`, then
-`docker compose up -d --build` again.
+`GITMIRROR_UI_PORT=8091 GITMIRROR_WEBHOOK_PORT=8085 docker compose up -d`, or put those two
+lines in a `.env` file next to `docker-compose.yml`. `GITMIRROR_UI_BIND=0.0.0.0` opens the web
+pages to your network; use it only on a network you trust.
+Everything you set up is kept in the `gitmirror-data` volume. To update later:
+`docker compose pull && docker compose up -d`. To build from the code instead:
+`docker compose -f docker-compose.yml -f compose.build.yml up -d --build`.
 
 ### If you use plain Docker
 
@@ -317,12 +322,12 @@ Only one gitmirror can use a data folder at a time; a second one fails with
 ### A. Docker Compose (recommended)
 
 If you started gitmirror with Docker Compose in step 3, you are done: `restart: unless-stopped`
-starts it again after a reboot. Useful commands, from the `deploy` folder:
+starts it again after a reboot. Useful commands, from the folder with `docker-compose.yml`:
 
 ```sh
 docker compose logs -f gitmirror                   # follow the log
 docker compose exec gitmirror gitmirror status     # status from the command line
-docker compose build && docker compose up -d       # upgrade after updating the source code
+docker compose pull && docker compose up -d        # upgrade to the newest image
 ```
 
 * The web pages are published on `127.0.0.1:8090` only. To use them from another computer, put an

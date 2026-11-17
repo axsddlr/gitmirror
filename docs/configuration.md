@@ -361,7 +361,7 @@ cp config.example.yaml config.yaml    # then edit it
 #    `secrets:` list and the top-level `secrets:` block.
 # 4. Check, then start:
 docker compose run --rm gitmirror validate
-docker compose up -d --build
+docker compose up -d
 ```
 
 `state_dir` in the config is ignored in the container (`GITMIRROR_STATE_DIR=/data` wins).
