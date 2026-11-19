@@ -21,6 +21,21 @@ func TestDashboardEmptyStates(t *testing.T) {
 
 var pairLinkRe = regexp.MustCompile(`href="(/pair\?k=[^"]+)"`)
 
+func TestMirrorsListExplainsFailures(t *testing.T) {
+	w := newWorld(t, "")
+	w.addSites()
+	w.addRepo(w.gh.Provider, "alice", "two")
+	w.addRepo(w.gt.Provider, "carol", "two") // not made by gitmirror: refused
+	w.putRule(config.Rule{Name: "bad", From: config.Source{Forge: "github", Repo: "alice/two"}, To: config.Dest{Forge: "git-example-com", Repo: "carol/two"}})
+	if _, err := w.app.Sync(context.Background(), []string{"bad"}, nil, false, "cli"); err != nil {
+		t.Fatal(err)
+	}
+	c := w.admin()
+	m := c.get("/mirrors")
+	mustContain(t, m, "Failed", "github: alice/two", "already exists at the destination", `href="/pair?k=`)
+	w.noSecrets(m.body)
+}
+
 func TestDashboardStatuses(t *testing.T) {
 	w := newWorld(t, "")
 	w.addSites()

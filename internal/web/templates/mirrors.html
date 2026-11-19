@@ -26,7 +26,10 @@
     <td data-label="Name"><strong>{{.Name}}</strong></td>
     <td data-label="What">{{.From}}<br>→ {{.To}}</td>
     <td data-label="How often">{{.Every}}</td>
-    <td data-label="Last result">{{template "status" .Status}}{{if .LastRunAbs}}<br><time class="muted" title="{{.LastRunAbs}}">{{.LastRun}}</time>{{end}}</td>
+    <td data-label="Last result">{{template "status" .Status}}{{if .LastRunAbs}}<br><time class="muted" title="{{.LastRunAbs}}">{{.LastRun}}</time>{{end}}
+      {{- range .Pairs}}{{if .Problem}}
+      <div class="pair-problem"><strong>{{.Src}}</strong> <a href="/pair?k={{.ID}}">Details</a>{{template "problem" .Problem}}</div>
+      {{- end}}{{end}}</td>
     <td class="row-actions">
       {{- if $d.CanSync}}<form class="inline" method="post" action="/mirrors/{{.Name}}/sync">{{template "csrf" $}}<button class="btn btn-small" type="submit">Sync now</button></form>{{end}}
       {{- if .FromFile}} <span class="muted">From config file — edit it there</span>
