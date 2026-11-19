@@ -58,7 +58,24 @@ type UI struct {
 	setupMu   sync.Mutex // guards setupCode and serialises setup
 	setupCode string     // normalised; "" when none is pending
 	lastPrune atomic.Int64
+	syncAsked atomic.Int64 // UnixNano of the last Sync now; 0 if none
 }
+
+// syncStartWindow is how long pages keep refreshing after Sync now while
+// the copy has not shown up as running yet.
+const syncStartWindow = 30 * time.Second
+
+// live reports whether a page should keep reloading: a copy is running, or
+// Sync now was pressed moments ago.
+func (u *UI) live(running bool) bool {
+	if running {
+		return true
+	}
+	at := u.syncAsked.Load()
+	return at != 0 && u.now().Sub(time.Unix(0, at)) < syncStartWindow
+}
+
+func (u *UI) markSyncAsked() { u.syncAsked.Store(u.now().UnixNano()) }
 
 func (u *UI) now() time.Time {
 	if u.Clock == nil {

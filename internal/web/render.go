@@ -25,7 +25,13 @@ type View struct {
 	Data any
 	// Status is the HTTP status; 0 means 200.
 	Status int
+	// Live makes the page reload itself every liveRefresh seconds, while
+	// copies run or were just requested.
+	Live bool
 }
+
+// liveRefresh is how often a Live page reloads, in seconds.
+const liveRefresh = 5
 
 // layoutData is the root template data: the View plus what the layout
 // needs. Page templates see the View fields directly (.Title, .Form, .Data).
@@ -35,6 +41,7 @@ type layoutData struct {
 	CSRF     string
 	Flashes  []Flash
 	NavItems []navItem
+	Refresh  int // seconds between reloads; 0 for none
 }
 
 type navItem struct {
@@ -159,6 +166,9 @@ func (u *UI) render(w http.ResponseWriter, r *http.Request, name string, v View)
 		return
 	}
 	d := layoutData{View: v, SignedIn: sessionFrom(r) != nil, CSRF: u.csrfToken(w, r), Flashes: u.takeFlashes(w, r)}
+	if v.Live && d.SignedIn {
+		d.Refresh = liveRefresh
+	}
 	if d.SignedIn {
 		for _, n := range nav {
 			d.NavItems = append(d.NavItems, navItem{Path: n.path, Label: n.label, Active: n.section == v.Section})

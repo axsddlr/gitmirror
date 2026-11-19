@@ -160,7 +160,7 @@ func (u *UI) dashboard(w http.ResponseWriter, r *http.Request) {
 			d.NotCopied++
 		}
 	}
-	u.render(w, r, "dashboard", View{Title: "Dashboard", Section: "dashboard", Data: d})
+	u.render(w, r, "dashboard", View{Title: "Dashboard", Section: "dashboard", Data: d, Live: u.live(d.Running > 0)})
 }
 
 type runView struct {
@@ -236,7 +236,8 @@ func (u *UI) pairPage(w http.ResponseWriter, r *http.Request) {
 		}
 		d.Runs = append(d.Runs, rv)
 	}
-	u.render(w, r, "pair", View{Title: k.SrcRepo + " → " + k.DstRepo, Section: "dashboard", Data: d})
+	u.render(w, r, "pair", View{Title: k.SrcRepo + " → " + k.DstRepo, Section: "dashboard", Data: d,
+		Live: u.live(pv.Status == stRunning)})
 }
 
 // ---- mirrors list, delete, sync ----
@@ -253,7 +254,11 @@ func (u *UI) mirrorsPage(w http.ResponseWriter, r *http.Request) {
 		u.serverError(w, r, err)
 		return
 	}
-	u.render(w, r, "mirrors", View{Title: "Mirrors", Section: "mirrors",
+	running := false
+	for _, m := range ms {
+		running = running || m.Run > 0
+	}
+	u.render(w, r, "mirrors", View{Title: "Mirrors", Section: "mirrors", Live: u.live(running),
 		Data: mirrorsData{List: ms, Sites: len(u.App.Config().Forges), CanSync: u.SyncNow != nil}})
 }
 
@@ -308,7 +313,8 @@ func (u *UI) syncMirror(w http.ResponseWriter, r *http.Request) {
 		u.log().Warn("web UI: sync now", "mirror", name, "err", err)
 		u.setFlash(w, r, FlashError, "gitmirror could not start copying "+name+". See the gitmirror log.")
 	} else {
-		u.setFlash(w, r, FlashInfo, "Copying "+name+" now. Reload the page in a moment to see the result.")
+		u.markSyncAsked()
+		u.setFlash(w, r, FlashInfo, "Copying "+name+" now. This page updates by itself until it is done.")
 	}
 	redirect(w, r, back(r, "/mirrors"))
 }
@@ -322,7 +328,8 @@ func (u *UI) syncAll(w http.ResponseWriter, r *http.Request) {
 		u.log().Warn("web UI: sync all", "err", err)
 		u.setFlash(w, r, FlashError, "gitmirror could not start copying. See the gitmirror log.")
 	} else {
-		u.setFlash(w, r, FlashInfo, "Copying every mirror now. Reload the page in a moment to see the results.")
+		u.markSyncAsked()
+		u.setFlash(w, r, FlashInfo, "Copying every mirror now. This page updates by itself until they are done.")
 	}
 	redirect(w, r, back(r, "/"))
 }

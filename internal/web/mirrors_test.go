@@ -10,9 +10,11 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"gitmirror/internal/config"
 	"gitmirror/internal/forge"
+	"gitmirror/internal/state"
 )
 
 func uiRule(t *testing.T, w *world, name string) config.Rule {
@@ -364,6 +366,52 @@ func TestFileDefinedMirrorReadOnly(t *testing.T) {
 	}
 	if r := w.app.Config().Rules[0]; r.Name != "filerule" || r.To.Owner != "bobm" {
 		t.Fatalf("file mirror changed: %+v", r)
+	}
+}
+
+func TestPagesRefreshWhileCopying(t *testing.T) {
+	const refresh = `http-equiv="refresh"`
+	w := newWorld(t, "")
+	w.addSites()
+	w.putRule(config.Rule{Name: "m1", From: config.Source{Forge: "github", Owner: "alice"}, To: config.Dest{Forge: "git-example-com", Owner: "carol"}})
+	c := w.admin()
+	pages := []string{"/", "/mirrors"}
+	for _, p := range pages {
+		if strings.Contains(c.get(p).body, refresh) {
+			t.Fatalf("%s refreshes with nothing running", p)
+		}
+	}
+
+	// Right after Sync now, before the copy has started, the pages refresh.
+	if r := c.postForm("/mirrors", "/mirrors/m1/sync", nil); r.code != http.StatusSeeOther {
+		t.Fatalf("sync now = %d", r.code)
+	}
+	for _, p := range pages {
+		r := c.get(p)
+		mustContain(t, r, refresh)
+		if strings.Contains(r.body, "Reload the page") {
+			t.Fatalf("%s still asks to reload by hand", p)
+		}
+	}
+
+	// Once that window has passed, only a running copy keeps them refreshing.
+	w.clock.Advance(time.Minute)
+	ctx := context.Background()
+	k := state.PairKey{Rule: "m1", SrcForge: "github", SrcRepo: "alice/a", DstForge: "git-example-com", DstRepo: "carol/a"}
+	id, err := w.app.Store.StartRun(ctx, k, "schedule")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range append(pages, "/pair?k="+pairID(k)) {
+		mustContain(t, c.get(p), refresh)
+	}
+	if err := w.app.Store.FinishRun(ctx, id, state.RunOK, nil, "", "", 1); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range append(pages, "/pair?k="+pairID(k)) {
+		if r := c.get(p); strings.Contains(r.body, refresh) {
+			t.Fatalf("%s refreshes after the copy finished", p)
+		}
 	}
 }
 

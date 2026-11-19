@@ -6,6 +6,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
 <title>{{if .Title}}{{.Title}} · {{end}}gitmirror</title>
+{{- if .Refresh}}
+<meta http-equiv="refresh" content="{{.Refresh}}">
+{{- end}}
 <link rel="stylesheet" href="/static/app.css">
 <link rel="icon" href="data:,">
 </head>
@@ -31,6 +34,9 @@
   </div>
 </header>
 <main id="main" class="wrap" tabindex="-1">
+  {{- if .Refresh}}
+  <p class="muted live-note">Copying is in progress. This page updates every {{.Refresh}} seconds.</p>
+  {{- end}}
   {{- range .Flashes}}
   <div class="flash flash-{{.Kind}}" role="{{if eq .Kind "error"}}alert{{else}}status{{end}}">{{.Message}}</div>
   {{- end}}
