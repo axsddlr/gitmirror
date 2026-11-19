@@ -31,7 +31,7 @@
   </fieldset>
   <div class="field{{if $e.account}} has-error{{end}}">
     <label for="account">Account or organisation (optional)</label>
-    <p class="hint" id="account-hint">Whose repositories to copy. Leave empty to use the account the site's token signs in as.</p>
+    <p class="hint" id="account-hint">Whose repositories to copy, such as torvalds, or paste a link like https://github.com/owner/repo to copy that one repository. Leave empty to use the account the site's token signs in as.</p>
     {{- with $e.account}}<p class="error" id="account-error">{{.}}</p>{{end}}
     <input id="account" name="account" type="text" value="{{$w.Account}}" autocomplete="off" aria-describedby="account-hint{{if $e.account}} account-error{{end}}"{{if $e.account}} aria-invalid="true"{{end}}>
   </div>

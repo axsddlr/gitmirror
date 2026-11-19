@@ -409,6 +409,67 @@ func (h *harness) admin2() *client {
 // Copying into the source account under the same names is caught when
 // leaving step 3, not only on Preview (owner and pick modes, and a custom
 // name equal to the original's).
+func TestParseSourceRef(t *testing.T) {
+	for _, tc := range []struct {
+		in, host, owner, repo string
+		ok                    bool
+	}{
+		{"bob", "", "bob", "", true},
+		{"bob/Lichii", "", "bob", "Lichii", true},
+		{"https://github.com/zortos293/Lichii", "github.com", "zortos293", "Lichii", true},
+		{"https://github.com/zortos293/Lichii.git", "github.com", "zortos293", "Lichii", true},
+		{"https://github.com/zortos293/Lichii/tree/main/src", "github.com", "zortos293", "Lichii", true},
+		{"https://github.com/zortos293/", "github.com", "zortos293", "", true},
+		{"http://GitHub.com/zortos293", "github.com", "zortos293", "", true},
+		{"github.com/zortos293/Lichii", "github.com", "zortos293", "Lichii", true},
+		{"www.github.com/zortos293/Lichii", "github.com", "zortos293", "Lichii", true},
+		{"git@github.com:zortos293/Lichii.git", "github.com", "zortos293", "Lichii", true},
+		{"https://git.example.com:3000/carol/x?tab=readme#top", "git.example.com", "carol", "x", true},
+		{"https://github.com/", "", "", "", false},
+		{"a/b/c", "", "", "", false},
+		{"bad name", "", "", "", false},
+	} {
+		host, owner, repo, ok := parseSourceRef(tc.in)
+		if ok != tc.ok || ok && (host != tc.host || owner != tc.owner || repo != tc.repo) {
+			t.Errorf("parseSourceRef(%q) = %q %q %q %v, want %q %q %q %v", tc.in, host, owner, repo, ok, tc.host, tc.owner, tc.repo, tc.ok)
+		}
+	}
+}
+
+func TestWizardAcceptsRepoLink(t *testing.T) {
+	w := newWorld(t, "")
+	w.addSites()
+	w.addRepo(w.gh.Provider, "zortos293", "Lichii")
+	w.addRepo(w.gh.Provider, "zortos293", "other")
+	c := w.admin()
+
+	// A repository link picks that repository, even with "everything" chosen.
+	first := c.get("/mirrors/new")
+	repos := c.next(first, "next", url.Values{"src": {"github"}, "mode": {"owner"}, "account": {"https://github.com/zortos293/Lichii"}})
+	if repos.code != http.StatusOK {
+		t.Fatalf("link = %d\n%.3000s", repos.code, repos.body)
+	}
+	mustContain(t, repos, "Step 2 of 5", `name="repo" value="Lichii" checked`)
+	if strings.Contains(repos.body, `name="repo" value="other" checked`) {
+		t.Fatal("other repository ticked")
+	}
+	to := c.next(repos, "next", nil)
+	mustContain(t, to, "Step 3 of 5: Copy to")
+
+	// An account link keeps the chosen mode.
+	repos = c.next(first, "next", url.Values{"src": {"github"}, "mode": {"owner"}, "account": {"https://github.com/zortos293"}})
+	if repos.code != http.StatusOK || strings.Contains(repos.body, `name="repo" value="Lichii" checked`) {
+		t.Fatalf("account link = %d\n%.3000s", repos.code, repos.body)
+	}
+
+	// A link to another site is caught on step 1.
+	r := c.next(first, "next", url.Values{"src": {"git-example-com"}, "mode": {"pick"}, "account": {"https://github.com/zortos293/Lichii"}})
+	if r.code != http.StatusBadRequest {
+		t.Fatalf("other site = %d", r.code)
+	}
+	mustContain(t, r, "Step 1 of 5", "github.com", "git.example.com")
+}
+
 func TestWizardSelfCopyCaughtOnStep3(t *testing.T) {
 	w := newWorld(t, "")
 	w.addSites()

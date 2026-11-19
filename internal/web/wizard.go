@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/url"
 	"regexp"
 	"slices"
 	"strconv"
@@ -97,6 +98,51 @@ type wizard struct {
 	Adopt      bool
 	Name       string
 	OptsSet    bool
+
+	// linkHost is the host of a link pasted into the account field, checked
+	// against the chosen site. It is not carried between steps.
+	linkHost string
+}
+
+// parseSourceRef reads what was typed into the account field: an account
+// name, owner/repo, or a link to an account or repository such as
+// https://github.com/owner/repo, github.com/owner/repo/tree/main or
+// git@github.com:owner/repo.git. host is lower case without "www." and empty
+// when no host was given; repo is empty for an account link.
+func parseSourceRef(in string) (host, owner, repo string, ok bool) {
+	in = strings.TrimSpace(in)
+	var path string
+	isLink := true
+	switch {
+	case strings.Contains(in, "://"):
+		u, err := url.Parse(in)
+		if err != nil {
+			return "", "", "", false
+		}
+		host, path = u.Hostname(), u.Path
+	case strings.HasPrefix(in, "git@") && strings.Contains(in, ":"):
+		host, path, _ = strings.Cut(strings.TrimPrefix(in, "git@"), ":")
+	default:
+		first, rest, _ := strings.Cut(in, "/")
+		if strings.Contains(first, ".") && rest != "" {
+			host, path = first, rest
+		} else {
+			path, isLink = in, false
+		}
+	}
+	host = strings.TrimPrefix(strings.ToLower(host), "www.")
+	segs := strings.Split(strings.Trim(path, "/"), "/")
+	if !isLink && len(segs) > 2 {
+		return "", "", "", false
+	}
+	owner = segs[0]
+	if len(segs) > 1 {
+		repo = strings.TrimSuffix(segs[1], ".git")
+	}
+	if !accountRe.MatchString(owner) || repo != "" && !repoNameRe.MatchString(repo) {
+		return "", "", "", false
+	}
+	return host, owner, repo, true
 }
 
 func (w *wizard) pickKey() string { return w.Src + "/" + w.Account + "/" + w.Mode }
@@ -116,6 +162,17 @@ func readWizard(f *Form) *wizard {
 			w.Picked = append(w.Picked, p)
 		}
 	}
+	// A pasted link or owner/repo becomes the account, and a repository in it
+	// is picked. Anything that does not parse is left for checkFrom to reject.
+	var linkRepo string
+	if strings.ContainsAny(w.Account, "/:") {
+		if host, owner, repo, ok := parseSourceRef(w.Account); ok {
+			w.Account, w.linkHost, linkRepo = owner, host, repo
+			if repo != "" {
+				w.Mode = modePick
+			}
+		}
+	}
 	slices.Sort(w.Picked)
 	for _, fc := range featureChoices {
 		if slices.Contains(v["feat"], fc.Value) {
@@ -125,6 +182,9 @@ func readWizard(f *Form) *wizard {
 	if w.PickFor != "" && w.PickFor != w.pickKey() {
 		// The source changed: earlier picks and filters no longer apply.
 		w.Picked, w.FilterSet, w.Forks, w.Archived, w.PickFor = nil, false, false, false, ""
+	}
+	if linkRepo != "" {
+		w.Picked, w.PickFor = []string{linkRepo}, w.pickKey()
 	}
 	return w
 }
@@ -206,7 +266,17 @@ func (u *UI) checkFrom(ctx context.Context, snap *app.Snapshot, w *wizard, f *Fo
 	case w.Account == "":
 		f.SetError("account", "Enter the account or organisation to copy from.")
 	case !accountRe.MatchString(w.Account):
-		f.SetError("account", "Enter an account name like alice or my-org: letters, digits, '.', '-' and '_' only.")
+		f.SetError("account", "Enter an account name like alice or my-org (letters, digits, '.', '-' and '_' only), or paste a link to an account or repository.")
+	case w.linkHost != "":
+		addr := siteAddress(snap.Config.Forges[w.Src])
+		siteHost := addr
+		if u, err := url.Parse(addr); err == nil && u.Hostname() != "" {
+			siteHost = u.Hostname()
+		}
+		siteHost = strings.TrimPrefix(strings.ToLower(siteHost), "www.")
+		if siteHost != w.linkHost {
+			f.SetError("account", "That link is for "+w.linkHost+", but the site "+w.Src+" is "+siteHost+". Choose the site the link belongs to, or add it on the Sites page.")
+		}
 	}
 }
 
