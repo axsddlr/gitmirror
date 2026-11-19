@@ -285,6 +285,10 @@ func lfsPin(rem Remote) []string {
 		"lfs.fetchexclude=",
 		"lfs.skipdownloaderrors=false",
 		"lfs.allowincompletepush=false",
+		// A mirror takes no locks. Verifying them costs a request per pushed
+		// ref (slow for repositories with many branches and tags) and prints
+		// a "Locking support detected" hint for each.
+		"lfs.locksverify=false",
 	}
 }
 

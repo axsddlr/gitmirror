@@ -90,6 +90,9 @@ func TestExplainKnownProblems(t *testing.T) {
 		"create destination dst:carol/x: gitea: POST /orgs: status 403: forbidden":                                             "token is not allowed",
 		"github: get authenticated user: 401 Bad credentials":                                                                  "refused the token",
 		"interrupted": "interrupted",
+		"git: gitx: lfs push https://git.example.com/carol/x.git: git lfs push: context deadline exceeded (signal: killed): Locking support detected": "took longer than its time limit",
+		"git: gitx: fetch https://github.com/a/b.git: git fetch: context deadline exceeded (signal: killed)":                                       "took longer than its time limit",
+		"github: GET /user: dial tcp: lookup api.github.com: no such host":                                                                         "could not reach the site",
 	} {
 		if got := explain(msg).Text; !strings.Contains(got, want) {
 			t.Errorf("explain(%q) = %q, want it to mention %q", msg, got, want)

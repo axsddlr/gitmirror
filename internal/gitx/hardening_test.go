@@ -230,6 +230,11 @@ func TestLFSConfigInMirroredContentIgnored(t *testing.T) {
 				if !cmdHasArgPair(c.Args, "-c", "lfs.url="+want) || !cmdHasArgPair(c.Args, "-c", "lfs.pushurl="+want) {
 					t.Errorf("lfs command %q does not pin lfs.url/lfs.pushurl to %s", c.Args, want)
 				}
+				// A mirror takes no locks; verifying them costs one request
+				// per pushed ref and fills the log with hints.
+				if !cmdHasArgPair(c.Args, "-c", "lfs.locksverify=false") {
+					t.Errorf("lfs command %q does not turn off lock verification", c.Args)
+				}
 			}
 			if lfsCmds != 2 {
 				t.Fatalf("saw %d lfs fetch/push commands, want 2", lfsCmds)

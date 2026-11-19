@@ -80,6 +80,10 @@ var explanations = []struct {
 		"The destination refused the update, for example because of a protected branch. Check the branch protection settings there."},
 	{[]string{"interrupted", "context canceled"},
 		"The copy was interrupted because gitmirror stopped. It runs again on the next schedule."},
+	// A git command that ran past gitmirror's own time limit is killed; that
+	// is slowness (large files, a slow link), not an unreachable site.
+	{[]string{"deadline exceeded (signal: killed)"},
+		"A step of the copy took longer than its time limit and was stopped. This happens with very large repositories or large files (LFS) on a slow connection. The copy is tried again on the next schedule and continues where it can; if it keeps failing, untick \"Large files (LFS)\" in the mirror's options."},
 	{[]string{"no such host", "connection refused", "i/o timeout", "deadline exceeded", "timeout", "unreachable", "certificate", "tls:"},
 		"gitmirror could not reach the site. Check that it is online and that its address is right."},
 }
