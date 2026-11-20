@@ -269,11 +269,25 @@ func lfsTransfer(ctx context.Context, r *Runner, dir string, src, dst Remote) er
 	if _, err := r.run(ctx, spec{gitDir: dir, auth: []Remote{src}, cfg: lfsPin(src), args: []string{"lfs", "fetch", "--all", "--", src.URL}}); err != nil {
 		return fmt.Errorf("gitx: lfs fetch %s: %w", src, err)
 	}
-	if _, err := r.run(ctx, spec{gitDir: dir, auth: []Remote{dst}, cfg: lfsPin(dst), args: []string{"lfs", "push", "--all", "--", dst.URL}}); err != nil {
-		return onDst(fmt.Errorf("gitx: lfs push %s: %w", dst, err))
+	// Push the fetched objects by id. "lfs push --all" would walk the full
+	// history of every ref a second time, which runs for hours on
+	// repositories with many branches; the destination's batch API skips
+	// objects it already has.
+	oids := lfsObjectIDs(dir)
+	for len(oids) > 0 {
+		n := min(len(oids), lfsPushBatch)
+		args := append([]string{"lfs", "push", "--object-id", "--", dst.URL}, oids[:n]...)
+		if _, err := r.run(ctx, spec{gitDir: dir, auth: []Remote{dst}, cfg: lfsPin(dst), args: args}); err != nil {
+			return onDst(fmt.Errorf("gitx: lfs push %s: %w", dst, err))
+		}
+		oids = oids[n:]
 	}
 	return nil
 }
+
+// lfsPushBatch is how many object ids one lfs push command carries, which
+// keeps the command line well inside every operating system's limit.
+var lfsPushBatch = 200
 
 // lfsPin returns the git config overrides for an LFS command talking to rem.
 func lfsPin(rem Remote) []string {
@@ -513,20 +527,50 @@ func parsePorcelain(out string) (rejected []string, statuses int) {
 	return rejected, statuses
 }
 
-// countLFSObjects counts LFS objects stored in the cache.
+// countLFSObjects counts LFS objects stored in the cache: 0 when it holds
+// none, -1 when the store cannot be read.
 func countLFSObjects(dir string) int {
-	n := 0
-	err := filepath.WalkDir(filepath.Join(dir, "lfs", "objects"), func(_ string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if !d.IsDir() && len(d.Name()) == 64 {
-			n++
-		}
-		return nil
-	})
+	root := filepath.Join(dir, "lfs", "objects")
+	if _, err := os.Stat(root); errors.Is(err, fs.ErrNotExist) {
+		return 0
+	}
+	oids, err := walkLFSObjects(root)
 	if err != nil {
 		return -1
 	}
-	return n
+	return len(oids)
+}
+
+// lfsObjectIDs returns the ids of the LFS objects stored in the cache.
+func lfsObjectIDs(dir string) []string {
+	oids, _ := walkLFSObjects(filepath.Join(dir, "lfs", "objects"))
+	return oids
+}
+
+func walkLFSObjects(root string) ([]string, error) {
+	var oids []string
+	err := filepath.WalkDir(root, func(_ string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() && isOID(d.Name()) {
+			oids = append(oids, d.Name())
+		}
+		return nil
+	})
+	return oids, err
+}
+
+// isOID reports whether s is a lowercase sha256 hex id, the only form of
+// name git-lfs gives stored objects.
+func isOID(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }

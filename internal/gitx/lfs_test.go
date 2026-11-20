@@ -68,7 +68,9 @@ func TestSyncLFSOverFileRemotes(t *testing.T) {
 	if !strings.Contains(fetch, "lfs fetch --all -- "+f.srcRemote.URL) {
 		t.Fatalf("lfs fetch args = %q", fetch)
 	}
-	if !strings.Contains(push, "lfs push --all -- "+f.dstRemote.URL) {
+	// Objects are pushed by id: "push --all" walks the history of every ref
+	// again, which takes hours on repositories with many branches.
+	if !strings.Contains(push, "lfs push --object-id -- "+f.dstRemote.URL+" "+srcOIDs[0]) {
 		t.Fatalf("lfs push args = %q", push)
 	}
 
@@ -77,6 +79,68 @@ func TestSyncLFSOverFileRemotes(t *testing.T) {
 	res = f.sync(SyncOptions{LFS: true, LFSDigest: Digest(res.SrcRefs)})
 	if res.Changed || res.LFSObjects != -1 {
 		t.Fatalf("unchanged LFS run: Changed=%v LFSObjects=%d", res.Changed, res.LFSObjects)
+	}
+}
+
+// TestSyncLFSSkipsPushWithoutObjects: a repository that uses no LFS has
+// nothing to push, so no lfs push runs at all.
+func TestSyncLFSSkipsPushWithoutObjects(t *testing.T) {
+	requireLFS(t)
+	f := newFixture(t)
+	f.commit("a.txt")
+	f.push("main")
+	f.resetCmds()
+	res := f.sync(SyncOptions{LFS: true})
+	if res.LFSObjects != 0 {
+		t.Fatalf("LFSObjects = %d, want 0", res.LFSObjects)
+	}
+	for _, c := range f.captured() {
+		if j := strings.Join(c.Args, " "); strings.Contains(j, " lfs push ") {
+			t.Fatalf("lfs push ran with no LFS objects: %q", j)
+		}
+	}
+	if n := len(refsOf(t, f.env, f.dst)); n == 0 {
+		t.Fatal("git refs were not pushed")
+	}
+}
+
+// TestSyncLFSPushesInBatches: many objects are pushed over several commands
+// so the argument list stays within the operating system's limit.
+func TestSyncLFSPushesInBatches(t *testing.T) {
+	requireLFS(t)
+	defer func(n int) { lfsPushBatch = n }(lfsPushBatch)
+	lfsPushBatch = 2
+	f := newFixture(t)
+	f.git("lfs", "install", "--local")
+	f.git("lfs", "track", "*.bin")
+	for _, name := range []string{"a.bin", "b.bin", "c.bin"} {
+		blob := make([]byte, 1024)
+		rand.Read(blob)
+		if err := os.WriteFile(filepath.Join(f.work, name), blob, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.git("add", ".gitattributes", "a.bin", "b.bin", "c.bin")
+	f.git("commit", "-q", "-m", "lfs")
+	f.push("main")
+	srcOIDs := lfsObjects(t, f.src)
+	if len(srcOIDs) != 3 {
+		t.Fatalf("fixture: src LFS objects = %v", srcOIDs)
+	}
+	f.resetCmds()
+	res := f.sync(SyncOptions{LFS: true})
+	equalStrings(t, "dst LFS objects", lfsObjects(t, f.dst), srcOIDs)
+	if res.LFSObjects != 3 {
+		t.Fatalf("LFSObjects = %d, want 3", res.LFSObjects)
+	}
+	pushes := 0
+	for _, c := range f.captured() {
+		if strings.Contains(strings.Join(c.Args, " "), " lfs push ") {
+			pushes++
+		}
+	}
+	if pushes != 2 {
+		t.Fatalf("lfs push ran %d times, want 2", pushes)
 	}
 }
 
