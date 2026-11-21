@@ -176,7 +176,7 @@ func (e *Engine) identityMismatch(rec state.OwnershipRecord, dstForge string, cu
 		why = append(why, fmt.Sprintf("its repository id is %d but gitmirror recorded %d, so it was replaced "+
 			"(deleted and re-created, or restored from a backup)", cur.ID, rec.RepoID))
 	}
-	if e.urlChanged(rec, dstForge, opt) && !(rec.RepoID != 0 && rec.RepoID == cur.ID) {
+	if e.urlChanged(rec, dstForge, opt) && (rec.RepoID == 0 || rec.RepoID != cur.ID) {
 		why = append(why, fmt.Sprintf("the forge URL of %q changed from %s to %s", dstForge, rec.ForgeURL, e.forgeURL(opt, dstForge)))
 	}
 	return strings.Join(why, "; ")
