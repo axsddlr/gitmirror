@@ -314,6 +314,15 @@ func (r *pairRun) prepare(ctx context.Context) bool {
 				}
 				r.log.Info("engine: recorded destination identity", "repo_id", dst.ID, "forge_url", forgeURL)
 			}
+			// Same repository id, new forge URL: the same server at a new
+			// address. Record the new URL so later runs compare against it.
+			if !r.dry() && r.e.urlChanged(rec, p.DstForge, r.opt) {
+				if err := r.e.Store.MarkOwnedAs(context.WithoutCancel(ctx), p.DstForge, p.DstFullName(), rec.How, dst.ID, forgeURL); err != nil {
+					return fail(fmt.Errorf("record new forge URL of %s: %w", r.dstName(), err))
+				}
+				r.e.audit(ctx, r.log, r.key, state.AuditRelocate, fmt.Sprintf("forge URL changed from %s to %s; repository id %d unchanged (trigger %s)",
+					rec.ForgeURL, forgeURL, dst.ID, r.opt.trigger()))
+			}
 			r.ownHow = rec.How
 			detail = "destination exists (" + string(rec.How) + ")"
 		}

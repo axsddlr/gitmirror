@@ -22,11 +22,14 @@ const (
 	AuditArchive AuditAction = "archive"
 	// AuditDelete means gitmirror deleted the destination repository.
 	AuditDelete AuditAction = "delete"
+	// AuditRelocate means the destination forge's base URL changed while the
+	// repository id stayed the same, and gitmirror recorded the new URL.
+	AuditRelocate AuditAction = "relocate"
 )
 
 func (a AuditAction) valid() bool {
 	switch a {
-	case AuditCreate, AuditAdopt, AuditArchive, AuditDelete:
+	case AuditCreate, AuditAdopt, AuditArchive, AuditDelete, AuditRelocate:
 		return true
 	}
 	return false

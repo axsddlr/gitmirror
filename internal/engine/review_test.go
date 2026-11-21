@@ -234,11 +234,51 @@ func TestRecreatedDestinationRefused(t *testing.T) {
 	}
 }
 
-func TestForgeURLChangeRefused(t *testing.T) {
+// A forge URL change alone (same repository id) is the same server reached at
+// a new address, e.g. a LAN address instead of the public one: the sync goes
+// ahead and the new URL is recorded and audited.
+func TestForgeURLChangeWithSameRepoIDAccepted(t *testing.T) {
 	h := newHarness(t)
 	h.eng.ForgeURLs = map[string]string{"dst": "https://old.example"}
 	p := h.pair(h.addSource(forge.Repo{Name: "x"}), settings("settings"))
 	wantStatus(t, h.sync(p, Options{}), state.RunOK)
+	id := h.dstRepo("mirrors", "x").ID
+	h.eng.ForgeURLs["dst"] = "http://192.168.1.147:3000"
+
+	// A dry run passes and records nothing.
+	wantStatus(t, h.sync(p, Options{DryRun: true}), state.RunOK)
+	if rec := ownership(t, h, "mirrors/x"); rec.ForgeURL != "https://old.example" {
+		t.Fatalf("dry run recorded %+v", rec)
+	}
+
+	wantStatus(t, h.sync(p, Options{}), state.RunOK)
+	rec := ownership(t, h, "mirrors/x")
+	if rec.ForgeURL != "http://192.168.1.147:3000" || rec.RepoID != id || id == 0 || rec.How != state.OwnedCreated {
+		t.Fatalf("ownership after address change %+v (destination id %d)", rec, id)
+	}
+	found := false
+	for _, ev := range h.auditLog() {
+		if ev.Action == state.AuditRelocate && strings.Contains(ev.Detail, "https://old.example") &&
+			strings.Contains(ev.Detail, "http://192.168.1.147:3000") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no relocate audit event: %+v", h.auditLog())
+	}
+}
+
+// Without a recorded repository id a URL change cannot be told apart from a
+// different server, so it is still refused.
+func TestForgeURLChangeRefused(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	h.eng.ForgeURLs = map[string]string{"dst": "https://old.example"}
+	p := h.pair(h.addSource(forge.Repo{Name: "x"}), settings("settings"))
+	wantStatus(t, h.sync(p, Options{}), state.RunOK)
+	if err := h.store.MarkOwnedAs(ctx, "dst", "mirrors/x", state.OwnedCreated, 0, "https://old.example"); err != nil {
+		t.Fatal(err)
+	}
 	h.eng.ForgeURLs["dst"] = "https://new.example"
 	mark := len(h.dst.Calls())
 	r := h.sync(p, Options{})

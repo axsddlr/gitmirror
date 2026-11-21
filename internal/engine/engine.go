@@ -168,16 +168,25 @@ func (e *Engine) maxAssetSize() int64 {
 // (deleted and re-created, or restored from a backup) or a different forge
 // base URL (forges.<name>.url now points at another server). It returns ""
 // when they match; unknown values (0 / "") on either side are not compared.
+// A URL change is not a mismatch when both repository ids are known and
+// equal: that is the same server reached at a new address (see relocated).
 func (e *Engine) identityMismatch(rec state.OwnershipRecord, dstForge string, cur *forge.Repo, opt Options) string {
 	var why []string
 	if rec.RepoID != 0 && cur.ID != 0 && rec.RepoID != cur.ID {
 		why = append(why, fmt.Sprintf("its repository id is %d but gitmirror recorded %d, so it was replaced "+
 			"(deleted and re-created, or restored from a backup)", cur.ID, rec.RepoID))
 	}
-	if url := e.forgeURL(opt, dstForge); rec.ForgeURL != "" && url != "" && rec.ForgeURL != url {
-		why = append(why, fmt.Sprintf("the forge URL of %q changed from %s to %s", dstForge, rec.ForgeURL, url))
+	if e.urlChanged(rec, dstForge, opt) && !(rec.RepoID != 0 && rec.RepoID == cur.ID) {
+		why = append(why, fmt.Sprintf("the forge URL of %q changed from %s to %s", dstForge, rec.ForgeURL, e.forgeURL(opt, dstForge)))
 	}
 	return strings.Join(why, "; ")
+}
+
+// urlChanged reports whether the destination forge's base URL differs from
+// the one recorded in rec; unknown values on either side are not compared.
+func (e *Engine) urlChanged(rec state.OwnershipRecord, dstForge string, opt Options) bool {
+	url := e.forgeURL(opt, dstForge)
+	return rec.ForgeURL != "" && url != "" && rec.ForgeURL != url
 }
 
 // lfsAvailable reports (once per Engine) whether git-lfs can be run.
