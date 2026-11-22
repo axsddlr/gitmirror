@@ -104,6 +104,7 @@ All keys can be overridden per rule.
 | `on_source_deleted` | string | `defaults.on_source_deleted` | as above | Override. |
 | `deletion_grace` | duration string | `defaults.deletion_grace` | as above | Override. |
 | `delete_missing_releases` | bool | `defaults.delete_missing_releases` | none | Override (an explicit `false` overrides a `true` default). |
+| `keep_releases` | int | `0` (all) | `>= 0` | Rule-only. Copy only the newest N releases (drafts not counted) and delete older releases gitmirror copied earlier, whatever `delete_missing_releases` says. Releases gitmirror did not create and git tags are left alone. |
 | `max_ref_deletions` | int | `defaults.max_ref_deletions` | as above | Override (an explicit `0` overrides the default). |
 | `max_ref_deletions_percent` | int | `defaults.max_ref_deletions_percent` | as above | Override. |
 | `adopt` | bool | `false` | none (rule-level only; not in `defaults`) | Allow writing into destination repos that gitmirror did not create. Without it such a destination makes the pair fail. Adopted destinations are pruned like any mirror (refs missing at the source are removed) and are archived rather than deleted. Also needed to keep mirroring into a destination that was replaced (deleted and re-created, restored from a backup) or whose forge `url` changed; the new repository id is then recorded. With `adopt`, destination releases with a source release's tag are updated even if gitmirror did not create them. |

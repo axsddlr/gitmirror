@@ -243,6 +243,9 @@ func (c *Config) validateRule(r Rule, seen map[string]int, idx int, add func(str
 	validateDeletionGuard("", r.MaxRefDeletions, r.MaxRefDeletionsPercent, func(f string, a ...any) {
 		add("%s", strings.TrimPrefix(fmt.Sprintf(f, a...), ": "))
 	})
+	if r.KeepReleases < 0 {
+		add("keep_releases %d must be >= 0", r.KeepReleases)
+	}
 }
 
 func splitRepo(s string) (owner, name string, ok bool) {

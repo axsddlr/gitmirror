@@ -211,6 +211,10 @@ type Rule struct {
 	DeletionGrace string `yaml:"deletion_grace" json:"deletion_grace,omitempty"`
 	// DeleteMissingReleases overrides Defaults.DeleteMissingReleases when non-nil.
 	DeleteMissingReleases *bool `yaml:"delete_missing_releases" json:"delete_missing_releases,omitempty"`
+	// KeepReleases, when > 0, copies only the newest KeepReleases releases
+	// (drafts not counted) and deletes older releases gitmirror copied
+	// earlier. 0 keeps them all.
+	KeepReleases int `yaml:"keep_releases" json:"keep_releases,omitempty"`
 	// MaxRefDeletions overrides Defaults.MaxRefDeletions when non-nil.
 	MaxRefDeletions *int `yaml:"max_ref_deletions" json:"max_ref_deletions,omitempty"`
 	// MaxRefDeletionsPercent overrides Defaults.MaxRefDeletionsPercent when non-nil.
@@ -278,6 +282,7 @@ type RuleSettings struct {
 	OnSourceDeleted       string
 	DeletionGrace         time.Duration // how long a source must stay not found before OnSourceDeleted applies
 	DeleteMissingReleases bool
+	KeepReleases          int // > 0: only the newest N releases are kept (see Rule.KeepReleases)
 	Adopt                 bool
 	AllowPublish          bool
 	// MaxRefDeletions and MaxRefDeletionsPercent are the mass ref deletion
@@ -312,6 +317,7 @@ func (r Rule) Effective(d Defaults) RuleSettings {
 		Visibility:            d.Visibility,
 		OnSourceDeleted:       d.OnSourceDeleted,
 		DeleteMissingReleases: d.DeleteMissingReleases,
+		KeepReleases:          r.KeepReleases,
 		Adopt:                 r.Adopt,
 		AllowPublish:          r.AllowPublish,
 	}

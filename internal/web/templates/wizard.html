@@ -124,6 +124,12 @@
     <label class="choice"><input type="checkbox" name="feat" value="{{.Value}}"{{if .Checked}} checked{{end}}> {{.Label}} <span class="hint-inline">{{.Hint}}</span></label>
     {{- end}}
   </fieldset>
+  <div class="field{{if $e.keepreleases}} has-error{{end}}">
+    <label for="keepreleases">Keep only the newest releases</label>
+    <p class="hint" id="keepreleases-hint">Used when Releases is ticked. Leave empty to copy every release. With a number, only that many of the newest releases are copied, and older releases gitmirror copied earlier are deleted from the copy. Releases made at the destination by hand are left alone.</p>
+    {{- with $e.keepreleases}}<p class="error" id="keepreleases-error">{{.}}</p>{{end}}
+    <input id="keepreleases" name="keepreleases" type="number" min="0" step="1" inputmode="numeric" placeholder="All" value="{{$w.KeepReleases}}" aria-describedby="keepreleases-hint{{if $e.keepreleases}} keepreleases-error{{end}}"{{if $e.keepreleases}} aria-invalid="true"{{end}}>
+  </div>
   <fieldset class="choices{{if $e.visibility}} has-error{{end}}">
     <legend>Who can see new copies</legend>
     {{- with $e.visibility}}<p class="error">{{.}}</p>{{end}}
@@ -161,6 +167,9 @@
     <dt>Copies</dt><dd>{{$v.FromLabel}} → {{$v.ToLabel}}</dd>
     <dt>How often</dt><dd>{{$v.Every}}</dd>
     <dt>Who can see new copies</dt><dd>{{if eq $w.Visibility "private"}}Private{{else}}Same as the original{{end}}</dd>
+    {{- with $v.KeepReleases}}
+    <dt>Releases</dt><dd>Only the newest {{.}}; older copied releases are deleted</dd>
+    {{- end}}
   </dl>
   {{if $w.Adopt}}<p class="warning"><strong>Careful:</strong> repositories that already exist at the destination will be replaced to match the original.</p>{{end}}
   <h3>What would happen now</h3>

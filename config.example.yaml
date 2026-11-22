@@ -105,7 +105,8 @@ git:
 # `to` takes exactly one of owner (+ optional name template) / repo.
 # Per-rule keys override `defaults`: interval, include, visibility,
 # on_source_deleted, deletion_grace, delete_missing_releases, max_ref_deletions,
-# max_ref_deletions_percent. `adopt` and `allow_publish` are rule-only.
+# max_ref_deletions_percent. `adopt`, `allow_publish` and `keep_releases` are
+# rule-only.
 # --------------------------------------------------------------------------
 rules:
   # 1. Owner rule: mirror every repo of a user/org (GitHub -> Gitea).
@@ -160,6 +161,9 @@ rules:
     adopt: true
     include: [git, settings, releases]
     delete_missing_releases: true
+    # keep_releases: copy only the newest N releases and delete older ones
+    # gitmirror copied earlier (releases made by hand are left). 0 = all.
+    # keep_releases: 5
     visibility: match-source           # destination public only if the source is public
     # allow_publish: an ADOPTED private destination is never made public, even
     # with match-source and a public source, unless this is true. Default false.

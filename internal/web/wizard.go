@@ -96,8 +96,11 @@ type wizard struct {
 	Visibility string
 	Interval   string
 	Adopt      bool
-	Name       string
-	OptsSet    bool
+	// KeepReleases is the "keep only the newest N releases" field as typed;
+	// "" or "0" keeps them all.
+	KeepReleases string
+	Name         string
+	OptsSet      bool
 
 	// linkHost is the host of a link pasted into the account field, checked
 	// against the chosen site. It is not carried between steps.
@@ -155,7 +158,7 @@ func readWizard(f *Form) *wizard {
 		PickFor: v.Get("pickfor"), Query: get("q"), Forks: v.Get("forks") == "1", Archived: v.Get("archived") == "1",
 		FilterSet: v.Get("filterset") == "1", Dst: get("dst"), DstOwner: get("dstowner"), Naming: get("naming"),
 		DstName: get("dstname"), Visibility: get("visibility"), Interval: get("interval"), Adopt: v.Get("adopt") == "1",
-		Name: get("name"), OptsSet: v.Get("optsset") == "1",
+		Name: get("name"), OptsSet: v.Get("optsset") == "1", KeepReleases: get("keepreleases"),
 	}
 	for _, p := range v["repo"] {
 		if p = strings.TrimSpace(p); p != "" && !slices.Contains(w.Picked, p) {
@@ -237,6 +240,7 @@ func (w *wizard) hidden(step string, shownRepos []string) []kv {
 		add("visibility", w.Visibility)
 		add("interval", w.Interval)
 		flag("adopt", w.Adopt)
+		add("keepreleases", w.KeepReleases)
 		add("name", w.Name)
 	}
 	return out
@@ -357,6 +361,9 @@ func (u *UI) checkOptions(cfg *config.Config, w *wizard, f *Form) {
 	}
 	if d, err := time.ParseDuration(w.Interval); err != nil || d < time.Minute {
 		f.SetError("interval", "Choose how often to copy.")
+	}
+	if _, ok := w.keepReleases(); !ok {
+		f.SetError("keepreleases", "Enter a whole number of releases to keep, or leave it empty to keep them all.")
 	}
 	if w.Name == "" {
 		w.Name = suggestMirrorName(cfg, w)
@@ -481,10 +488,23 @@ func pickedNames(r config.Rule) ([]string, bool) {
 
 func ptr[T any](v T) *T { return &v }
 
+// keepReleases parses KeepReleases: "" is 0 (keep all); ok is false for
+// anything but a whole number >= 0.
+func (w *wizard) keepReleases() (int, bool) {
+	if w.KeepReleases == "" {
+		return 0, true
+	}
+	n, err := strconv.Atoi(w.KeepReleases)
+	return n, err == nil && n >= 0
+}
+
 // rule builds the mirror rule of a validated wizard.
 func (w *wizard) rule() config.Rule {
 	r := config.Rule{Name: w.Name, Interval: w.Interval, Visibility: w.Visibility, Adopt: w.Adopt,
 		Include: append([]string{config.FeatureGit}, w.Features...)}
+	if n, _ := w.keepReleases(); n > 0 && slices.Contains(w.Features, config.FeatureReleases) {
+		r.KeepReleases = n
+	}
 	r.From.Forge, r.To.Forge = w.Src, w.Dst
 	tmpl := tmplSame
 	if w.Naming == namingPrefix {
@@ -527,6 +547,9 @@ func wizardFromRule(cfg *config.Config, r config.Rule) *wizard {
 		Visibility: eff.Visibility, Interval: r.Interval, Adopt: r.Adopt, FilterSet: true, OptsSet: true, Naming: namingSame}
 	if w.Interval == "" {
 		w.Interval = cfg.Defaults.Interval
+	}
+	if r.KeepReleases > 0 {
+		w.KeepReleases = strconv.Itoa(r.KeepReleases)
 	}
 	for _, fc := range featureChoices {
 		if eff.Includes(fc.Value) {
@@ -620,6 +643,8 @@ type wizardView struct {
 	ToLabel   string
 	FromLabel string
 	Every     string
+	// KeepReleases is the release limit of the rule being saved (0: all).
+	KeepReleases int
 }
 
 func (u *UI) renderWizard(w http.ResponseWriter, r *http.Request, f *Form, wz *wizard, step string, status int) {
@@ -671,6 +696,7 @@ func (u *UI) renderWizardWith(w http.ResponseWriter, r *http.Request, f *Form, w
 	case stepPreview:
 		rl := wz.rule()
 		v.FromLabel, v.ToLabel = fromLabel(rl), toLabel(rl)
+		v.KeepReleases = rl.KeepReleases
 		if d, err := time.ParseDuration(wz.Interval); err == nil {
 			v.Every = everyLabel(d)
 		}

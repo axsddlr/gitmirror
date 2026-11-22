@@ -101,9 +101,30 @@ func (r *pairRun) syncReleases(ctx context.Context) {
 	trustTags := r.ownHow == state.OwnedCreated || r.p.Settings.Adopt
 	t := &releaseTally{}
 	matched := map[int64]bool{}
+	// With KeepReleases, source releases past the newest N (drafts not
+	// counted; sources list newest first) are not copied, and their earlier
+	// copies are deleted below.
+	tooOld := map[int64]bool{}
+	if keep := r.p.Settings.KeepReleases; keep > 0 {
+		n := 0
+		for _, sr := range srcRels {
+			if sr.Draft {
+				continue
+			}
+			if n++; n > keep {
+				tooOld[sr.ID] = true
+			}
+		}
+		if len(tooOld) > 0 {
+			t.notes = append(t.notes, fmt.Sprintf("only the newest %d releases are kept; %d older not copied", keep, len(tooOld)))
+		}
+	}
 	// Oldest first, so the newest source release is also newest on the destination.
 	for i := len(srcRels) - 1; i >= 0; i-- {
 		sr := srcRels[i]
+		if tooOld[sr.ID] {
+			continue
+		}
 		if sr.Draft {
 			t.drafts++
 			if id, ok := relMap[sr.ID]; ok {
@@ -166,7 +187,7 @@ func (r *pairRun) syncReleases(ctx context.Context) {
 			continue
 		}
 		srcID, mine := ours[d.ID]
-		if !r.p.Settings.DeleteMissingReleases || !mine {
+		if !mine || !r.p.Settings.DeleteMissingReleases && !tooOld[srcID] {
 			t.left++
 			continue
 		}
