@@ -19,6 +19,11 @@ var (
 	// is written to the destination or the cache in that case.
 	ErrEmptySource = errors.New("gitx: source repository has no branches or tags")
 
+	// ErrSourceNotFound is returned (wrapped) by Cache.Sync when the source
+	// repository does not exist (e.g. a GitHub wiki that is enabled but has
+	// never had a page). Nothing is written in that case.
+	ErrSourceNotFound = errors.New("gitx: source repository not found")
+
 	// ErrLFSUnavailable is returned (wrapped) when SyncOptions.LFS is set but
 	// git-lfs cannot be run.
 	ErrLFSUnavailable = errors.New("gitx: git-lfs is not available")
@@ -198,6 +203,9 @@ func (c *Cache) sync(ctx context.Context, src, dst Remote, opt SyncOptions) (*Sy
 	res := &SyncResult{LFSObjects: -1}
 	srcRefs, err := r.LsRemote(ctx, src)
 	if err != nil {
+		if repoNotFound(err) {
+			return nil, fmt.Errorf("%w: %w", ErrSourceNotFound, err)
+		}
 		return nil, err
 	}
 	if len(srcRefs) == 0 {
@@ -573,4 +581,16 @@ func isOID(s string) bool {
 		}
 	}
 	return true
+}
+
+// repoNotFound reports whether a git error says the remote repository does
+// not exist (GitHub, Gitea/Forgejo over HTTP, or a local path).
+func repoNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "Repository not found") ||
+		strings.Contains(msg, "does not appear to be a git repository") ||
+		strings.Contains(msg, "fatal: repository '") && strings.Contains(msg, "' not found")
 }

@@ -717,6 +717,12 @@ func (r *pairRun) syncWiki(ctx context.Context) {
 		r.record(StepWiki, start, state.StepSkipped, "source wiki is empty")
 		return
 	}
+	if errors.Is(err, gitx.ErrSourceNotFound) {
+		// The forge reports a wiki, but its repository was never created
+		// (GitHub: wiki enabled, no page written yet).
+		r.record(StepWiki, start, state.StepSkipped, "source wiki does not exist")
+		return
+	}
 	if err != nil {
 		if errors.Is(err, gitx.ErrDestination) {
 			if r.dry() && canInit {

@@ -329,10 +329,12 @@ func TestWikiFailureHintOnlyForDestinationSide(t *testing.T) {
 		s := h.addSource(forge.Repo{Name: "proj", HasWiki: true}) // no wiki repository
 		s.commit("a.txt")
 		s.push("main")
+		// The forge says there is a wiki but its repository does not exist
+		// (GitHub: wiki enabled, no page ever written): skipped, not failed.
 		r := h.sync(h.pair(s, settings()), Options{})
-		wantStatus(t, r, state.RunPartial)
-		if d := wantStep(t, r, "wiki", state.StepFailed).Detail; strings.Contains(d, hint) {
-			t.Fatalf("source-side failure blames the destination: %q", d)
+		wantStatus(t, r, state.RunOK)
+		if d := wantStep(t, r, "wiki", state.StepSkipped).Detail; d != "source wiki does not exist" {
+			t.Fatalf("wiki detail = %q", d)
 		}
 	})
 	t.Run("DestinationWikiMissing", func(t *testing.T) {
