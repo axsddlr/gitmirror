@@ -452,6 +452,21 @@ func (s *Store) StartRun(ctx context.Context, k PairKey, trigger string) (int64,
 	return id, tx.Commit()
 }
 
+// UpdateRunSteps stores the steps a run has finished so far, so its progress
+// can be shown while it runs. Only a running run is changed; FinishRun later
+// replaces the steps with the final list.
+func (s *Store) UpdateRunSteps(ctx context.Context, id int64, steps []StepResult) error {
+	if steps == nil {
+		steps = []StepResult{}
+	}
+	sj, err := json.Marshal(steps)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `UPDATE runs SET steps = ? WHERE id = ? AND status = ?`, string(sj), id, string(RunRunning))
+	return err
+}
+
 // FinishRun completes a running run and updates the pair state in a single
 // transaction. ok/partial: LastSuccess=now, error cleared, failures reset, and
 // a non-empty newDigest updates LastDigest/LastRefCount. failed/aborted:

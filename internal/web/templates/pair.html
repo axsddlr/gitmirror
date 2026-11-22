@@ -7,7 +7,7 @@
     <dt>Mirror</dt><dd>{{.Data.Mirror}}</dd>
     <dt>Original</dt><dd>{{if $p.SrcURL}}<a href="{{$p.SrcURL}}" rel="noreferrer">{{$p.Src}}</a>{{else}}{{$p.Src}}{{end}}</dd>
     <dt>Copy</dt><dd>{{if $p.DstURL}}<a href="{{$p.DstURL}}" rel="noreferrer">{{$p.Dst}}</a>{{else}}{{$p.Dst}}{{end}}</dd>
-    <dt>Status</dt><dd>{{template "status" $p.Status}}{{template "problem" $p.Problem}}</dd>
+    <dt>Status</dt><dd>{{template "status" $p.Status}}{{template "progress" $p.Progress}}{{template "problem" $p.Problem}}</dd>
     <dt>Last copied</dt><dd>{{if $p.LastAbs}}<time title="{{$p.LastAbs}}">{{$p.Last}}</time>{{else}}{{$p.Last}}{{end}}</dd>
   </dl>
 </section>

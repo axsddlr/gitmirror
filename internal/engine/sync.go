@@ -39,7 +39,10 @@ type pairRun struct {
 	p   resolve.Pair
 	opt Options
 	key state.PairKey
-	log *slog.Logger
+	// runID is the stored run (0 in a dry run); finished steps are written
+	// to it as they happen so the web UI can show progress.
+	runID int64
+	log   *slog.Logger
 
 	srcP, dstP forge.Provider
 	src        *forge.Repo // fresh source metadata
@@ -85,6 +88,12 @@ func (r *pairRun) record(step string, start time.Time, st state.StepStatus, deta
 	}
 	r.steps = append(r.steps, state.StepResult{Step: step, Status: st, Detail: detail, Duration: d})
 	r.log.Debug("engine: step", "step", step, "status", st, "detail", detail)
+	if r.runID != 0 {
+		// Progress only: a failed write is logged and the run goes on.
+		if err := r.e.Store.UpdateRunSteps(context.Background(), r.runID, r.steps); err != nil {
+			r.log.Warn("engine: store run progress", "err", err)
+		}
+	}
 }
 
 func (r *pairRun) skip(step, reason string) {

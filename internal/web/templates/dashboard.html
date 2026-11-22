@@ -44,7 +44,7 @@
     <tr>
       <td data-label="Original">{{if .SrcURL}}<a href="{{.SrcURL}}" rel="noreferrer">{{.Src}}</a>{{else}}{{.Src}}{{end}}</td>
       <td data-label="Copy">{{if .DstURL}}<a href="{{.DstURL}}" rel="noreferrer">{{.Dst}}</a>{{else}}{{.Dst}}{{end}}</td>
-      <td data-label="Status">{{template "status" .Status}}{{template "problem" .Problem}}</td>
+      <td data-label="Status">{{template "status" .Status}}{{template "progress" .Progress}}{{template "problem" .Problem}}</td>
       <td data-label="Last copied">{{if .LastAbs}}<time title="{{.LastAbs}}">{{.Last}}</time>{{else}}{{.Last}}{{end}}</td>
       <td class="row-actions"><a href="/pair?k={{.ID}}">Details</a></td>
     </tr>

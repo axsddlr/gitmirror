@@ -73,6 +73,7 @@
 {{end}}
 
 {{/* status is a statusView: icon and words, coloured by class. */}}
+{{define "progress"}}{{if .}}<div class="progress"><progress max="100" value="{{.Percent}}" aria-label="Copy progress">{{.Percent}}%</progress><span class="progress-label">{{.Label}}</span></div>{{end}}{{end}}
 {{define "status"}}<span class="status status-{{.Class}}"><span aria-hidden="true">{{.Icon}}</span> {{.Label}}</span>{{end}}
 
 {{/* problem is a *problem: plain words plus the technical text on demand. */}}

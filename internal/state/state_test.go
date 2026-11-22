@@ -469,3 +469,35 @@ func TestConcurrentRuns(t *testing.T) {
 		t.Fatalf("runs %d", len(runs))
 	}
 }
+
+func TestUpdateRunStepsWhileRunning(t *testing.T) {
+	s := openTemp(t)
+	k := key("progress")
+	id, err := s.StartRun(ctx, k, "manual")
+	if err != nil {
+		t.Fatal(err)
+	}
+	steps := []StepResult{{Step: "prepare", Status: StepOK, Detail: "ok"}}
+	if err := s.UpdateRunSteps(ctx, id, steps); err != nil {
+		t.Fatal(err)
+	}
+	runs, err := s.Runs(ctx, k, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 1 || runs[0].Status != RunRunning || len(runs[0].Steps) != 1 || runs[0].Steps[0].Step != "prepare" {
+		t.Fatalf("running run %+v", runs)
+	}
+	final := []StepResult{{Step: "prepare", Status: StepOK}, {Step: "git", Status: StepOK}}
+	if err := s.FinishRun(ctx, id, RunOK, final, "", "", 0); err != nil {
+		t.Fatal(err)
+	}
+	// A finished run is never changed by a late progress write.
+	if err := s.UpdateRunSteps(ctx, id, steps); err != nil {
+		t.Fatal(err)
+	}
+	runs, _ = s.Runs(ctx, k, 1)
+	if len(runs[0].Steps) != 2 {
+		t.Fatalf("finished run steps changed: %+v", runs[0].Steps)
+	}
+}

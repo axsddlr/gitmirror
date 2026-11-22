@@ -22,6 +22,7 @@ type pairView struct {
 	Status                   statusView
 	Last, LastAbs            string
 	Problem                  *problem
+	Progress                 *progressView // set while a copy is running
 }
 
 // mirrorView is one mirror (rule) with the state of its pairs.
@@ -36,6 +37,7 @@ type mirrorView struct {
 	Pairs          []pairView
 	Problems, OKs  int
 	NotCopied, Run int
+	Progress       *progressView // running copies of this mirror, averaged
 }
 
 // pairID encodes a pair key for a URL.
@@ -105,6 +107,7 @@ func (u *UI) mirrorViews(ctx context.Context) ([]mirrorView, error) {
 			}
 			m.Pairs = append(m.Pairs, pv)
 		}
+		m.Progress = mirrorProgress(m.Pairs)
 		m.LastRun, m.LastRunAbs = relTime(now, lastRun), absTime(lastRun)
 		out = append(out, m)
 	}
@@ -124,6 +127,10 @@ func (u *UI) pairView(ctx context.Context, snap *app.Snapshot, ps state.PairStat
 	if len(runs) > 0 {
 		run = runs[0]
 		pv.Status = runStatus(run)
+		if run.Status == state.RunRunning {
+			p := runProgress(run.Steps, ruleIncludes(snap, k.Rule, "lfs"))
+			pv.Progress = &p
+		}
 		if run.Status != state.RunOK && run.Status != state.RunRunning && run.Error != "" {
 			p := explain(run.Error)
 			pv.Problem = &p

@@ -300,7 +300,7 @@ func (e *Engine) SyncPair(ctx context.Context, p resolve.Pair, opt Options) (rep
 			rep.Status, rep.Err = state.RunFailed, fmt.Errorf("engine: start run: %w", err)
 			return rep
 		}
-		rep.RunID = id
+		rep.RunID, r.runID = id, id
 	}
 	defer func() {
 		if v := recover(); v != nil {
