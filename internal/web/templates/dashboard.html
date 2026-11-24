@@ -28,31 +28,34 @@
   {{- if $d.NotCopied}}<li><strong>{{$d.NotCopied}}</strong> not copied yet</li>{{end}}
 </ul>
 {{range $d.List}}
-<section class="card mirror">
+<section class="card mirror{{if .Problems}} needs-attention{{end}}">
   <div class="page-head">
     <h2>{{.Name}} {{template "status" .Status}}</h2>
     {{- if $d.CanSync}}
     <form method="post" action="/mirrors/{{.Name}}/sync">{{template "csrf" $}}<input type="hidden" name="back" value="/"><button class="btn btn-small" type="submit">Sync now</button></form>
     {{- end}}
   </div>
-  <p class="muted">{{.From}} → {{.To}}, {{.Every}}.</p>
+  <p class="route">{{.From}} → {{.To}}, {{.Every}}.</p>
   {{if .Pairs}}
-  <table class="table">
+  <table class="table pairs">
     <thead><tr><th scope="col">Original</th><th scope="col">Copy</th><th scope="col">Status</th><th scope="col">Last copied</th><th scope="col"><span class="sr-only">Details</span></th></tr></thead>
     <tbody>
     {{- range .Pairs}}
     <tr>
-      <td data-label="Original">{{if .SrcURL}}<a href="{{.SrcURL}}" rel="noreferrer">{{.Src}}</a>{{else}}{{.Src}}{{end}}</td>
-      <td data-label="Copy">{{if .DstURL}}<a href="{{.DstURL}}" rel="noreferrer">{{.Dst}}</a>{{else}}{{.Dst}}{{end}}</td>
-      <td data-label="Status">{{template "status" .Status}}{{template "progress" .Progress}}{{template "problem" .Problem}}</td>
-      <td data-label="Last copied">{{if .LastAbs}}<time title="{{.LastAbs}}">{{.Last}}</time>{{else}}{{.Last}}{{end}}</td>
+      <td data-label="Original">{{if .SrcURL}}<a class="slug" href="{{.SrcURL}}" rel="noreferrer">{{.Src}}</a>{{else}}<span class="slug">{{.Src}}</span>{{end}}</td>
+      <td data-label="Copy">{{if .DstURL}}<a class="slug" href="{{.DstURL}}" rel="noreferrer">{{.Dst}}</a>{{else}}<span class="slug">{{.Dst}}</span>{{end}}</td>
+      <td data-label="Status">{{template "status" .Status}}{{template "progress" .Progress}}</td>
+      <td data-label="Last copied" class="time">{{if .LastAbs}}<time title="{{.LastAbs}}">{{.Last}}</time>{{else}}{{.Last}}{{end}}</td>
       <td class="row-actions"><a href="/pair?k={{.ID}}">Details</a></td>
     </tr>
+    {{- if .Problem}}
+    <tr class="pair-problem"><td colspan="5">{{template "problem" .Problem}}</td></tr>
+    {{- end}}
     {{- end}}
     </tbody>
   </table>
   {{else}}
-  <p>{{template "status" .Status}} Nothing has been copied for this mirror yet{{if $d.CanSync}}; it starts on its schedule, or press Sync now{{end}}.</p>
+  <p class="route">Nothing has been copied for this mirror yet{{if $d.CanSync}}; it starts on its schedule, or press Sync now{{end}}.</p>
   {{end}}
 </section>
 {{end}}

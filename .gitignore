@@ -9,3 +9,6 @@
 .env
 /data/
 /secrets/
+
+# Design previews and mockups: scratch artefacts, never shipped
+/design-preview/
