@@ -149,6 +149,10 @@
     <label class="choice"><input type="checkbox" name="adopt" value="1"{{if $w.Adopt}} checked{{end}}> Allow copying into repositories that already exist <span class="hint-inline">Off by default: gitmirror only writes to repositories it created.</span></label>
     <p class="warning"><strong>Careful:</strong> when ticked, a repository that already exists at the destination with the same name has its content replaced to match the original. Changes made only there are lost.</p>
   </fieldset>
+  <fieldset class="choices">
+    <legend>Actions in the copy</legend>
+    <label class="choice"><input type="checkbox" name="noactions" value="1"{{if $w.DisableActions}} checked{{end}}> Do not let the copied workflows run <span class="hint-inline">Off by default. The workflow files are copied with the code, but Actions are turned off in the copy so nothing runs there. Needs admin rights on the destination.</span></label>
+  </fieldset>
   <div class="field{{if $e.name}} has-error{{end}}">
     <label for="name">Name of this mirror</label>
     <p class="hint" id="name-hint">A short name to recognise it. Lowercase letters, digits, - and _.</p>
@@ -169,6 +173,9 @@
     <dt>Who can see new copies</dt><dd>{{if eq $w.Visibility "private"}}Private{{else}}Same as the original{{end}}</dd>
     {{- with $v.KeepReleases}}
     <dt>Releases</dt><dd>Only the newest {{.}}; older copied releases are deleted</dd>
+    {{- end}}
+    {{- if $w.DisableActions}}
+    <dt>Actions</dt><dd>Turned off in the copy; the workflow files are still copied</dd>
     {{- end}}
   </dl>
   {{if $w.Adopt}}<p class="warning"><strong>Careful:</strong> repositories that already exist at the destination will be replaced to match the original.</p>{{end}}

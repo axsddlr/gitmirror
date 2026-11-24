@@ -549,6 +549,28 @@ func TestUpdateSettingsArchiveLast(t *testing.T) {
 	}
 }
 
+// Turning Actions off uses the per-repository permissions endpoint, not the
+// repository PATCH.
+func TestUpdateSettingsActionsOff(t *testing.T) {
+	f := newFakeAPI(t)
+	var bodies []string
+	f.settingsHandlers(&bodies)
+	f.handle("PUT /repos/o/n/actions/permissions", func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, "PUT "+string(b))
+		writeJSON(w, 200, map[string]any{"enabled": false})
+	})
+	if err := f.provider().UpdateRepoSettings(context.Background(), "o", "n", forge.Settings{Actions: ptr(false)}); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(f.requests(), "|"); got != "PUT /api/v3/repos/o/n/actions/permissions" {
+		t.Fatalf("calls %s", got)
+	}
+	if len(bodies) != 1 || !strings.Contains(bodies[0], `"enabled":false`) {
+		t.Fatalf("bodies %v", bodies)
+	}
+}
+
 func TestUpdateSettingsSkipsEmptyCalls(t *testing.T) {
 	f := newFakeAPI(t)
 	var bodies []string

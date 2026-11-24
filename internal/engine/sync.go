@@ -365,6 +365,19 @@ func (r *pairRun) prepare(ctx context.Context) bool {
 		r.dst.Archived = false
 		detail += "; unarchived"
 	}
+	if r.p.Settings.DisableActions {
+		// The workflow files stay in the copy, but the site must not run
+		// them. Done here rather than in the settings step so the rule holds
+		// even when that step is not included.
+		r.action("turn Actions off for %s", r.dstName())
+		if !r.dry() {
+			f := false
+			if err := r.dstP.UpdateRepoSettings(ctx, p.DstOwner, p.DstName, forge.Settings{Actions: &f}); err != nil {
+				return fail(fmt.Errorf("turn Actions off for %s: %w", r.dstName(), err))
+			}
+		}
+		detail += "; Actions off"
+	}
 	r.record(StepPrepare, start, state.StepOK, detail)
 	return true
 }

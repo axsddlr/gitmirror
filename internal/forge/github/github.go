@@ -384,6 +384,15 @@ func (p *Provider) UpdateRepoSettings(ctx context.Context, owner, name string, s
 		}
 	}
 
+	if s.Actions != nil {
+		// Actions are a separate endpoint per repository, and turning them
+		// off needs admin rights on the destination.
+		if _, _, err := p.client.Repositories.UpdateActionsPermissions(ctx, owner, name,
+			gh.ActionsPermissionsRepository{Enabled: *s.Actions}); err != nil {
+			return p.wrap(op+" actions", err)
+		}
+	}
+
 	if s.Archived != nil && *s.Archived {
 		return patch(&gh.Repository{Archived: ptr(true)})
 	}

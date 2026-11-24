@@ -94,8 +94,9 @@ exit $status
 `
 
 type repoEntry struct {
-	repo     forge.Repo
-	releases []forge.Release // ascending by ID
+	repo       forge.Repo
+	releases   []forge.Release // ascending by ID
+	actionsOff bool            // Actions turned off by the settings of a rule
 }
 
 // Provider is the fake forge.
@@ -564,7 +565,19 @@ func (p *Provider) UpdateRepoSettings(ctx context.Context, owner, name string, s
 	if s.Archived != nil {
 		e.repo.Archived = *s.Archived
 	}
+	if s.Actions != nil {
+		e.actionsOff = !*s.Actions
+	}
 	return nil
+}
+
+// ActionsOff reports whether Actions were turned off for a repository. It is
+// for tests: the fake has no read API for that setting.
+func (p *Provider) ActionsOff(owner, name string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	e, ok := p.repos[key(owner, name)]
+	return ok && e.actionsOff
 }
 
 // GitURL implements forge.Provider.

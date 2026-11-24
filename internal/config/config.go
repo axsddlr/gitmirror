@@ -219,6 +219,9 @@ type Rule struct {
 	MaxRefDeletions *int `yaml:"max_ref_deletions" json:"max_ref_deletions,omitempty"`
 	// MaxRefDeletionsPercent overrides Defaults.MaxRefDeletionsPercent when non-nil.
 	MaxRefDeletionsPercent *int `yaml:"max_ref_deletions_percent" json:"max_ref_deletions_percent,omitempty"`
+	// DisableActions turns Actions off in the destination repository, so the
+	// workflow files copied with the code cannot run there. The files stay.
+	DisableActions bool `yaml:"disable_actions" json:"disable_actions,omitempty"`
 	// Adopt allows writing to a destination repo this tool did not create.
 	Adopt bool `yaml:"adopt" json:"adopt,omitempty"`
 	// AllowPublish allows visibility "match-source" to make an adopted
@@ -283,6 +286,7 @@ type RuleSettings struct {
 	DeletionGrace         time.Duration // how long a source must stay not found before OnSourceDeleted applies
 	DeleteMissingReleases bool
 	KeepReleases          int // > 0: only the newest N releases are kept (see Rule.KeepReleases)
+	DisableActions        bool
 	Adopt                 bool
 	AllowPublish          bool
 	// MaxRefDeletions and MaxRefDeletionsPercent are the mass ref deletion
@@ -318,6 +322,7 @@ func (r Rule) Effective(d Defaults) RuleSettings {
 		OnSourceDeleted:       d.OnSourceDeleted,
 		DeleteMissingReleases: d.DeleteMissingReleases,
 		KeepReleases:          r.KeepReleases,
+		DisableActions:        r.DisableActions,
 		Adopt:                 r.Adopt,
 		AllowPublish:          r.AllowPublish,
 	}

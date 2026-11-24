@@ -47,6 +47,7 @@ func TestGitea(t *testing.T) {
 	t.Run("EmptySourceGuard", s.testEmptySource)
 	t.Run("Archive", s.testArchive)
 	t.Run("ReplacedDestination", s.testReplacedDestination)
+	t.Run("DisableActions", s.testDisableActions)
 }
 
 // seed creates the public repo owner/name on in with branch "main" plus extra
@@ -762,6 +763,38 @@ func (s *suite) testAdopt(t *testing.T) {
 	}
 	if got := b.getRepo(t, "mirrors", "s7"); got.Description != "from A" || !got.Private {
 		t.Fatalf("adopted B repo settings: %+v", got)
+	}
+}
+
+// ---- scenario: Actions turned off in the copy ----
+
+// A rule with disable_actions copies the code as usual but leaves Actions off
+// at the destination, so the workflow files it brought cannot run there.
+func (s *suite) testDisableActions(t *testing.T) {
+	a, b := s.a, s.b
+	s.seed(t, a, "alice", "s11", "with workflows")
+	m := s.newMirror(t, `
+- name: s11
+  from: {forge: a, repo: alice/s11}
+  to: {forge: b, repo: mirrors/s11}
+  disable_actions: true
+`)
+	r := m.one("b:mirrors/s11")
+	wantStatus(t, r, state.RunOK)
+	if d := wantStep(t, r, "prepare", state.StepOK).Detail; !strings.Contains(d, "Actions off") {
+		t.Fatalf("prepare detail %q", d)
+	}
+	equalRefs(t, "s11", s.git.lsRemote(t, b.gitURL("mirrors", "s11")), s.git.lsRemote(t, a.gitURL("alice", "s11")))
+
+	var repo struct {
+		HasActions *bool `json:"has_actions"`
+	}
+	b.mustAPI(t, "GET", "/repos/mirrors/s11", nil, &repo, 200)
+	if repo.HasActions == nil {
+		t.Skip("this Gitea does not report has_actions; nothing to check")
+	}
+	if *repo.HasActions {
+		t.Fatal("Actions still on at the destination")
 	}
 }
 

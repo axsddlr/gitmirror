@@ -105,8 +105,8 @@ git:
 # `to` takes exactly one of owner (+ optional name template) / repo.
 # Per-rule keys override `defaults`: interval, include, visibility,
 # on_source_deleted, deletion_grace, delete_missing_releases, max_ref_deletions,
-# max_ref_deletions_percent. `adopt`, `allow_publish` and `keep_releases` are
-# rule-only.
+# max_ref_deletions_percent. `adopt`, `allow_publish`, `disable_actions` and
+# `keep_releases` are rule-only.
 # --------------------------------------------------------------------------
 rules:
   # 1. Owner rule: mirror every repo of a user/org (GitHub -> Gitea).
@@ -168,5 +168,9 @@ rules:
     # allow_publish: an ADOPTED private destination is never made public, even
     # with match-source and a public source, unless this is true. Default false.
     # allow_publish: true
+    # disable_actions: turn Actions off in the copy, so the workflow files that
+    # come with the code cannot run there. The files themselves are still
+    # copied. Needs admin rights on the destination. Default false.
+    # disable_actions: true
     on_source_deleted: delete          # adopted repos are archived instead of deleted
     deletion_grace: 48h

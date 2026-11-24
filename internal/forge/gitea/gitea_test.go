@@ -500,6 +500,21 @@ func TestUpdateSettingsArchiveTrueLast(t *testing.T) {
 	}
 }
 
+// Turning Actions off is a repository unit: the same PATCH as the other
+// settings, with has_actions false.
+func TestUpdateSettingsActionsOff(t *testing.T) {
+	srv, c, bodies := settingsServer(t)
+	if err := newProv(t, srv.URL).UpdateRepoSettings(ctx(), "o", "n", forge.Settings{Actions: ptr(false)}); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(c.all(), "|"); got != "PATCH /api/v1/repos/o/n" {
+		t.Fatalf("calls %s", got)
+	}
+	if b := *bodies; len(b) != 1 || b[0]["has_actions"] != false || len(b[0]) != 1 {
+		t.Fatalf("body %v", b)
+	}
+}
+
 func TestUpdateSettingsEmptyMakesNoCalls(t *testing.T) {
 	srv, c, _ := settingsServer(t)
 	if err := newProv(t, srv.URL).UpdateRepoSettings(ctx(), "o", "n", forge.Settings{}); err != nil {

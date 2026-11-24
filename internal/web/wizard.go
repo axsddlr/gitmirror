@@ -96,6 +96,9 @@ type wizard struct {
 	Visibility string
 	Interval   string
 	Adopt      bool
+	// DisableActions turns Actions off in the copy, so the workflow files
+	// that come with the code cannot run there.
+	DisableActions bool
 	// KeepReleases is the "keep only the newest N releases" field as typed;
 	// "" or "0" keeps them all.
 	KeepReleases string
@@ -159,6 +162,7 @@ func readWizard(f *Form) *wizard {
 		FilterSet: v.Get("filterset") == "1", Dst: get("dst"), DstOwner: get("dstowner"), Naming: get("naming"),
 		DstName: get("dstname"), Visibility: get("visibility"), Interval: get("interval"), Adopt: v.Get("adopt") == "1",
 		Name: get("name"), OptsSet: v.Get("optsset") == "1", KeepReleases: get("keepreleases"),
+		DisableActions: v.Get("noactions") == "1",
 	}
 	for _, p := range v["repo"] {
 		if p = strings.TrimSpace(p); p != "" && !slices.Contains(w.Picked, p) {
@@ -240,6 +244,7 @@ func (w *wizard) hidden(step string, shownRepos []string) []kv {
 		add("visibility", w.Visibility)
 		add("interval", w.Interval)
 		flag("adopt", w.Adopt)
+		flag("noactions", w.DisableActions)
 		add("keepreleases", w.KeepReleases)
 		add("name", w.Name)
 	}
@@ -501,7 +506,8 @@ func (w *wizard) keepReleases() (int, bool) {
 // rule builds the mirror rule of a validated wizard.
 func (w *wizard) rule() config.Rule {
 	r := config.Rule{Name: w.Name, Interval: w.Interval, Visibility: w.Visibility, Adopt: w.Adopt,
-		Include: append([]string{config.FeatureGit}, w.Features...)}
+		DisableActions: w.DisableActions,
+		Include:        append([]string{config.FeatureGit}, w.Features...)}
 	if n, _ := w.keepReleases(); n > 0 && slices.Contains(w.Features, config.FeatureReleases) {
 		r.KeepReleases = n
 	}
@@ -544,7 +550,8 @@ func (w *wizard) rule() config.Rule {
 func wizardFromRule(cfg *config.Config, r config.Rule) *wizard {
 	eff := r.Effective(cfg.Defaults)
 	w := &wizard{Edit: r.Name, Step: stepFrom, Src: r.From.Forge, Dst: r.To.Forge, Name: r.Name,
-		Visibility: eff.Visibility, Interval: r.Interval, Adopt: r.Adopt, FilterSet: true, OptsSet: true, Naming: namingSame}
+		Visibility: eff.Visibility, Interval: r.Interval, Adopt: r.Adopt, DisableActions: r.DisableActions,
+		FilterSet: true, OptsSet: true, Naming: namingSame}
 	if w.Interval == "" {
 		w.Interval = cfg.Defaults.Interval
 	}

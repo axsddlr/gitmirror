@@ -504,6 +504,11 @@ func (p *Provider) UpdateRepoSettings(ctx context.Context, owner, name string, s
 	if s.Private != nil {
 		main["private"] = *s.Private
 	}
+	if s.Actions != nil {
+		// Gitea and Forgejo call the Actions feature a repository unit;
+		// has_actions turns it off (or on) without touching the files.
+		main["has_actions"] = *s.Actions
+	}
 	if len(main) > 0 {
 		if _, err := p.do(ctx, http.MethodPatch, rp, nil, main, nil); err != nil {
 			return err

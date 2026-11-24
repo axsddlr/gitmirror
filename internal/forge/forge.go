@@ -59,6 +59,10 @@ type Settings struct {
 	DefaultBranch *string
 	Private       *bool
 	Archived      *bool
+	// Actions says whether the repository's workflows may run. false keeps
+	// the files but stops the site from running them; it needs admin rights
+	// on the destination. nil leaves the setting alone.
+	Actions *bool
 }
 
 // Auth carries HTTP basic credentials for git transport.
