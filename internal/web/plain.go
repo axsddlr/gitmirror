@@ -84,8 +84,19 @@ var explanations = []struct {
 	// is slowness (large files, a slow link), not an unreachable site.
 	{[]string{"deadline exceeded (signal: killed)"},
 		"A step of the copy took longer than its time limit and was stopped. This happens with very large repositories or large files (LFS) on a slow connection. The copy is tried again on the next schedule and continues where it can; if it keeps failing, untick \"Large files (LFS)\" in the mirror's options."},
-	{[]string{"no such host", "connection refused", "i/o timeout", "deadline exceeded", "timeout", "unreachable", "certificate", "tls:"},
-		"gitmirror could not reach the site. Check that it is online and that its address is right."},
+	// A name that cannot be looked up (DNS), or a connection that fails or
+	// times out, is the network rather than a mistake in the mirror, so say
+	// what happened and that the schedule retries. A failed lookup is worded
+	// by whoever ran it: curl says "Could not resolve host", Go says
+	// "no such host" or "server misbehaving", musl "dns server returned ...".
+	{[]string{"no such host", "could not resolve host", "could not resolve", "name resolution", "server misbehaving",
+		"dns server returned", "connection refused", "connection reset", "could not connect", "failed to connect",
+		"network is unreachable", "no route to host", "i/o timeout", "deadline exceeded", "timeout", "unreachable"},
+		"gitmirror could not reach the site: its name could not be looked up (DNS) or the connection failed. " +
+			"It is tried again on the next schedule; if it keeps happening, check the network and the DNS settings of the machine running gitmirror, and that the site is online."},
+	{[]string{"certificate", "tls:", "x509"},
+		"gitmirror could not prove that the site is the one it is supposed to be: its TLS certificate was refused. " +
+			"Check the site's address and certificate, and the clock of the machine running gitmirror."},
 }
 
 // explain turns an error message from the engine, resolve or config
@@ -178,9 +189,12 @@ func connectionProblem(err error, addr, token string) string {
 	case strings.Contains(l, "403") || strings.Contains(l, "forbidden"):
 		return "The token was accepted but may not read your account. Give it the permissions listed below and try again."
 	case errors.As(err, &de) || errors.As(err, &oe) || errors.As(err, &ne) || errors.As(err, &ue) ||
-		strings.Contains(l, "no such host") || strings.Contains(l, "connection refused") || strings.Contains(l, "timeout") ||
-		strings.Contains(l, "deadline exceeded") || strings.Contains(l, "certificate"):
-		return "Could not reach " + addr + " — check the address."
+		strings.Contains(l, "no such host") || strings.Contains(l, "could not resolve host") ||
+		strings.Contains(l, "name resolution") || strings.Contains(l, "server misbehaving") ||
+		strings.Contains(l, "connection refused") || strings.Contains(l, "network is unreachable") ||
+		strings.Contains(l, "timeout") || strings.Contains(l, "deadline exceeded") ||
+		strings.Contains(l, "certificate"):
+		return "Could not reach " + addr + " — check the address, the network and the DNS settings of the machine running gitmirror."
 	case strings.Contains(l, "404") || strings.Contains(l, "not found"):
 		return "No site of this kind answered at " + addr + ". Check the address and the kind of site."
 	}
