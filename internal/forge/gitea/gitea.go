@@ -425,23 +425,27 @@ func (p *Provider) ListRepos(ctx context.Context, owner string) ([]forge.Repo, e
 		list, err := getPages[apiRepo](ctx, p, "/orgs/"+o+"/repos")
 		return repos(list), err
 	}
-	login, err := p.Login(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if strings.EqualFold(login, owner) {
-		// /user/repos includes private repos and collaborations; keep ours.
-		list, err := getPages[apiRepo](ctx, p, "/user/repos")
+	// A public, read-only site has no account to sign in as, so there is no
+	// /user to ask: list the owner's public repositories instead.
+	if p.token != "" {
+		login, err := p.Login(ctx)
 		if err != nil {
 			return nil, err
 		}
-		mine := list[:0]
-		for _, a := range list {
-			if strings.EqualFold(a.Owner.Login, owner) {
-				mine = append(mine, a)
+		if strings.EqualFold(login, owner) {
+			// /user/repos includes private repos and collaborations; keep ours.
+			list, err := getPages[apiRepo](ctx, p, "/user/repos")
+			if err != nil {
+				return nil, err
 			}
+			mine := list[:0]
+			for _, a := range list {
+				if strings.EqualFold(a.Owner.Login, owner) {
+					mine = append(mine, a)
+				}
+			}
+			return repos(mine), nil
 		}
-		return repos(mine), nil
 	}
 	list, err := getPages[apiRepo](ctx, p, "/users/"+o+"/repos")
 	return repos(list), err

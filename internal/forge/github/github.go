@@ -266,12 +266,19 @@ func (p *Provider) GetRepo(ctx context.Context, owner, name string) (*forge.Repo
 // ListRepos implements forge.Provider.
 func (p *Provider) ListRepos(ctx context.Context, owner string) ([]forge.Repo, error) {
 	op := "list repos of " + owner
-	me, err := p.login(ctx)
-	if err != nil {
-		return nil, err
+	// Without a token there is no authenticated user: list the owner's
+	// public repositories instead of asking who we are.
+	var (
+		me  string
+		err error
+	)
+	if p.token != "" {
+		if me, err = p.login(ctx); err != nil {
+			return nil, err
+		}
 	}
 	var rs []*gh.Repository
-	if strings.EqualFold(owner, me) {
+	if me != "" && strings.EqualFold(owner, me) {
 		rs, err = paginate(func(page int) ([]*gh.Repository, *gh.Response, error) {
 			return p.client.Repositories.ListByAuthenticatedUser(ctx, &gh.RepositoryListByAuthenticatedUserOptions{
 				Affiliation: "owner", Visibility: "all", ListOptions: gh.ListOptions{Page: page, PerPage: perPage},
