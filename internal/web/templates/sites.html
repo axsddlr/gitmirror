@@ -19,7 +19,7 @@
     <td data-label="Name"><strong>{{.Name}}</strong></td>
     <td data-label="Kind">{{.Kind}}</td>
     <td data-label="Address">{{.Address}}</td>
-    <td data-label="Signed in as">{{if .Account}}{{.Account}}{{else}}<span class="muted">Not known</span>{{end}}</td>
+    <td data-label="Signed in as">{{if .Account}}{{.Account}}{{else if .ReadOnly}}<span class="muted">Public, read-only</span>{{else}}<span class="muted">Not known</span>{{end}}</td>
     <td data-label="Used by">{{if .Mirrors}}{{len .Mirrors}} mirror{{if ne (len .Mirrors) 1}}s{{end}}{{else}}<span class="muted">No mirrors</span>{{end}}</td>
     <td class="row-actions">
       {{- if .FromFile}}<span class="muted">From config file — edit it there</span>

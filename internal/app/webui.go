@@ -36,7 +36,9 @@ const PreviewLimit = 200
 
 // CheckForge builds a provider for forge f (as it would be named name) and
 // asks it which account its token authenticates as, without saving
-// anything. Errors come from the provider and never contain the token.
+// anything. A forge without a token is a public, read-only site, so there is
+// no account to report: it is checked with one unauthenticated request
+// instead. Errors come from the provider and never contain the token.
 func (a *App) CheckForge(ctx context.Context, name string, f config.Forge) (login string, err error) {
 	cfg := &config.Config{Forges: map[string]config.Forge{name: f}}
 	provs, err := BuildProviders(cfg, a.opts)
@@ -47,12 +49,19 @@ func (a *App) CheckForge(ctx context.Context, name string, f config.Forge) (logi
 	if !ok {
 		return "", fmt.Errorf("forge %q: no provider", name)
 	}
+	ctx, cancel := context.WithTimeout(ctx, checkTimeout)
+	defer cancel()
+	if f.ReadOnly() {
+		pr, ok := p.(forge.Probe)
+		if !ok {
+			return "", fmt.Errorf("forge %q cannot be checked without a token: %w", name, forge.ErrUnsupported)
+		}
+		return "", pr.Probe(ctx)
+	}
 	id, ok := p.(forge.Identity)
 	if !ok {
 		return "", fmt.Errorf("forge %q cannot report its account: %w", name, forge.ErrUnsupported)
 	}
-	ctx, cancel := context.WithTimeout(ctx, checkTimeout)
-	defer cancel()
 	return id.Login(ctx)
 }
 

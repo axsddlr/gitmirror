@@ -94,8 +94,9 @@ func TestNewAndRegistry(t *testing.T) {
 	if _, err := New(forge.Options{Token: tok}); err == nil {
 		t.Error("missing URL accepted")
 	}
-	if _, err := New(forge.Options{URL: "https://h"}); err == nil {
-		t.Error("missing token accepted")
+	// No token means a public, read-only site: allowed, with no credentials.
+	if p, err := New(forge.Options{URL: "https://h"}); err != nil || p.GitAuth().Token != "" {
+		t.Errorf("site without a token: %v (%+v)", err, p)
 	}
 	p, err := New(forge.Options{URL: "https://h/gitea/", Token: tok})
 	if err != nil {

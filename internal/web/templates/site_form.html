@@ -18,7 +18,7 @@
     {{if .Data.Edit}}
     {{template "field" (optional (field .Form "token" "Token" "password" "off" "Leave empty to keep the current token (if you change the address, paste the token again). A new token is tested before it is saved."))}}
     {{else}}
-    {{template "field" (field .Form "token" "Token" "password" "off" "A personal access token you create on the site. See below which permissions it needs.")}}
+    {{template "field" (optional (field .Form "token" "Token" "password" "off" "A personal access token you create on the site; see below which permissions it needs. Leave it empty for a public site you only copy from: gitmirror then reads it anonymously and never writes to it."))}}
     {{template "field" (optional (field .Form "name" "Short name (optional)" "text" "off" "How gitmirror refers to this site. Leave empty to pick one from the address, like github or git-example-com. Lowercase letters, digits, - and _."))}}
     {{end}}
     <div class="actions">

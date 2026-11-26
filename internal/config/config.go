@@ -84,13 +84,20 @@ type Forge struct {
 	// URL is the base URL (required for gitea, optional for github).
 	// Trailing slashes are trimmed. No default is inserted.
 	URL string `yaml:"url"`
-	// Token is the API token. Exactly one of Token / TokenFile must be set in the file.
+	// Token is the API token. Optional: a forge without a token is a public
+	// site that can only be copied from (see ReadOnly). At most one of
+	// Token / TokenFile may be set in the file.
 	Token string `yaml:"token"`
 	// TokenFile is a path whose trimmed contents are the token.
 	TokenFile string `yaml:"token_file"`
 	// Username is the account name used for git-over-HTTP authentication.
 	Username string `yaml:"username"`
 }
+
+// ReadOnly reports whether the forge has no token. Such a site is read
+// anonymously, so it can copy public repositories from a server but can
+// never be a destination: gitmirror could not create or push anything there.
+func (f Forge) ReadOnly() bool { return f.Token == "" }
 
 // String implements fmt.Stringer without exposing the token.
 func (f Forge) String() string {

@@ -107,8 +107,15 @@ func TestMergeValidatesAcrossFileAndUIRules(t *testing.T) {
 
 func TestMergeUIForgeRules(t *testing.T) {
 	file := mustParse(t, rulesDoc(okRule), nil, nil)
-	_, err := Merge(file, map[string]Forge{"x": {Type: "github"}}, nil)
-	checkErr(t, err, "forges.x: one of token or token_file is required")
+	// A UI forge without a token is a public, read-only site: it may be
+	// added, but a rule that copies to it is refused.
+	if _, err := Merge(file, map[string]Forge{"x": {Type: "github"}}, nil); err != nil {
+		t.Fatalf("public site: %v", err)
+	}
+	_, err := Merge(file, map[string]Forge{"x": {Type: "github"}}, []Rule{
+		{Name: "ui-r", From: Source{Forge: "gh", Repo: "a/b"}, To: Dest{Forge: "x", Repo: "c/d"}},
+	})
+	checkErr(t, err, `to.forge "x" has no token, so it can only be copied from`)
 	_, err = Merge(file, map[string]Forge{"x": {Type: "github", TokenFile: "/run/t"}}, nil)
 	checkErr(t, err, "forges.x: token_file")
 	_, err = Merge(file, map[string]Forge{"x": {Type: "nope", Token: "t"}}, nil)

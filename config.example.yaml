@@ -25,7 +25,8 @@ concurrency: 4
 # --------------------------------------------------------------------------
 # Forges: named connections that rules refer to. Names must match
 # ^[a-z0-9][a-z0-9_-]*$. Known types: github, gitea (also use "gitea" for
-# Forgejo). Exactly one of token / token_file is required per forge.
+# Forgejo). A token is optional: without one the site is read-only and can
+# only be copied from (public repositories, read anonymously).
 # --------------------------------------------------------------------------
 forges:
   github:
@@ -39,6 +40,15 @@ forges:
   # Flow-map style is fine too, but ${...} MUST be quoted:
   # (token_file works the same way: token_file: "/run/secrets/gitea_token")
   gitea: { type: gitea, url: "${GITEA_URL:-https://git.example.com}", token: "${GITEA_TOKEN}" }
+
+  # A public site you only copy from needs no token: gitmirror reads it
+  # anonymously and never writes to it. Rules may name it in `from`, never in
+  # `to`: validation refuses that. Leave `token` out entirely (an env var that
+  # resolves to nothing is still an error).
+  # forgejo-public:
+  #   type: gitea
+  #   url: https://git.example.org
+  #   # token: not needed for reading public repositories
 
 # --------------------------------------------------------------------------
 # Defaults every rule inherits unless it overrides them.

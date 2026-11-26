@@ -304,8 +304,13 @@ func (u *UI) checkRepos(w *wizard, f *Form) {
 }
 
 func (u *UI) checkTo(ctx context.Context, snap *app.Snapshot, w *wizard, f *Form) {
-	if _, ok := snap.Config.Forges[w.Dst]; !ok {
+	dst, ok := snap.Config.Forges[w.Dst]
+	if !ok {
 		f.SetError("dst", "Choose the site to copy to.")
+		return
+	}
+	if dst.ReadOnly() {
+		f.SetError("dst", "That site has no token, so it can only be copied from. Choose another site, or add a token on the Sites page.")
 		return
 	}
 	if w.DstOwner == "" {
@@ -633,12 +638,14 @@ type previewView struct {
 }
 
 type wizardView struct {
-	W         *wizard
-	Step      string
-	StepNo    int
-	Steps     []choice // Value = step id, Label, Checked = current
-	Hidden    []kv
-	Sites     []siteRow
+	W      *wizard
+	Step   string
+	StepNo int
+	Steps  []choice // Value = step id, Label, Checked = current
+	Hidden []kv
+	Sites  []siteRow
+	// DstSites are the sites that can be copied to: the ones with a token.
+	DstSites  []siteRow
 	Modes     []choice
 	Namings   []choice
 	Features  []choice
@@ -671,6 +678,11 @@ func (u *UI) renderWizardWith(w http.ResponseWriter, r *http.Request, f *Form, w
 	switch step {
 	case stepFrom, stepTo:
 		v.Sites = u.siteRows(ctx)
+		for _, s := range v.Sites {
+			if !s.ReadOnly {
+				v.DstSites = append(v.DstSites, s)
+			}
+		}
 		v.Modes = []choice{
 			{modePick, "Choose repositories", "Pick one or more repositories from a list.", wz.Mode == modePick},
 			{modeOwner, "Everything from an account or organisation", "Also copies repositories added there later.", wz.Mode == modeOwner},

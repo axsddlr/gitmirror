@@ -604,6 +604,13 @@ func (p *Provider) Login(ctx context.Context) (string, error) {
 	return p.opts.Username, nil
 }
 
+// Probe implements forge.Probe: the fake site always answers.
+func (p *Provider) Probe(ctx context.Context) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.begin(ctx, "Probe")
+}
+
 // RateLimit implements forge.Provider.
 func (p *Provider) RateLimit(ctx context.Context) (forge.Rate, error) {
 	p.mu.Lock()

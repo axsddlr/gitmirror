@@ -198,7 +198,7 @@ func TestValidateOfflineBadConfig(t *testing.T) {
 	bad := `
 forges:
   a: {type: nope, token: x}
-  b: {type: fake}
+  b: {type: gitea, url: "ftp://x"}
 rules:
   - name: r
     from: {forge: missing, owner: x}
@@ -210,7 +210,7 @@ rules:
 	code, out, errOut := e.cli("validate", "--offline")
 	wantCode(t, code, 2, out, errOut)
 	all := out + errOut
-	for _, w := range []string{"forges.a: unknown type", "forges.b: one of token", "from.forge", "to: exactly one"} {
+	for _, w := range []string{"forges.a: unknown type", "forges.b: url must be an absolute", "from.forge", "to: exactly one"} {
 		if !strings.Contains(all, w) {
 			t.Fatalf("output lacks %q:\n%s", w, all)
 		}
@@ -235,6 +235,22 @@ func TestValidateOnline(t *testing.T) {
 		if !strings.Contains(out, w) {
 			t.Fatalf("output lacks %q:\n%s", w, out)
 		}
+	}
+}
+
+func TestValidatePublicReadOnlyForge(t *testing.T) {
+	e := newTestEnv(t)
+	e.addSource("alice", "a")
+	// The same fixture with the source forge stripped of its token.
+	cfg := strings.Replace(cfgYAML, "src: {type: fake, token: @TOKEN@}", "src: {type: fake}", 1)
+	y := strings.NewReplacer("@STATE@", filepath.ToSlash(e.stateDir), "@TOKEN@", sentinel).Replace(cfg)
+	if err := os.WriteFile(e.cfgPath, []byte(y), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errOut := e.cli("validate")
+	wantCode(t, code, 0, out, errOut)
+	if !strings.Contains(out, "forge src: ok (public, read-only)") {
+		t.Fatalf("output lacks the public, read-only line:\n%s", out)
 	}
 }
 

@@ -51,6 +51,15 @@ type CreateOptions struct {
 	Private     bool
 }
 
+// Probe is implemented by providers that can check a site answers without a
+// token. It is used for public, read-only forges, where there is no account
+// to sign in as.
+type Probe interface {
+	// Probe makes one unauthenticated request that only a working site of
+	// this kind answers.
+	Probe(ctx context.Context) error
+}
+
 // Settings is a partial update; nil fields are left untouched.
 type Settings struct {
 	Description   *string

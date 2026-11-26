@@ -17,10 +17,13 @@ import (
 )
 
 type jsonForgeCheck struct {
-	Name  string `json:"name"`
-	OK    bool   `json:"ok"`
-	Login string `json:"login,omitempty"`
-	Error string `json:"error,omitempty"`
+	Name string `json:"name"`
+	OK   bool   `json:"ok"`
+	// ReadOnly marks a site without a token: it is checked by asking the
+	// site to answer, not by signing in as an account.
+	ReadOnly bool   `json:"read_only,omitempty"`
+	Login    string `json:"login,omitempty"`
+	Error    string `json:"error,omitempty"`
 }
 
 type jsonRuleCheck struct {
@@ -147,6 +150,28 @@ func (c *cli) validate(ctx context.Context, offline bool) (int, error) {
 	sort.Strings(names)
 	for _, n := range names {
 		fc := jsonForgeCheck{Name: n}
+		if cfg.Forges[n].ReadOnly() {
+			// No token: there is no account to sign in as, so check that the
+			// site answers as the kind of server it claims to be.
+			fc.ReadOnly = true
+			lctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			pr, ok := provs[n].(forge.Probe)
+			var err error
+			if ok {
+				err = pr.Probe(lctx)
+			}
+			cancel()
+			if err != nil {
+				fc.Error = err.Error()
+				failed = true
+				say("forge %s: FAILED: %v", n, err)
+			} else {
+				fc.OK = true
+				say("forge %s: ok (public, read-only)", n)
+			}
+			doc.Forges = append(doc.Forges, fc)
+			continue
+		}
 		id, ok := provs[n].(forge.Identity)
 		if !ok {
 			fc.OK = true

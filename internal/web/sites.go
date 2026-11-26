@@ -32,6 +32,9 @@ type siteRow struct {
 	Name, Kind, Address, Account string
 	FromFile                     bool
 	Mirrors                      []string
+	// ReadOnly is true for a site without a token: public repositories can
+	// be copied from it, but it can never be a destination.
+	ReadOnly bool
 }
 
 // siteAddress is the address shown for a forge.
@@ -54,10 +57,16 @@ func mirrorsUsing(cfg *config.Config, site string) []string {
 }
 
 // account returns the account a site's token signs in as: the stored
-// username, else the provider's identity (cached by the provider).
+// username, else the provider's identity (cached by the provider). A public,
+// read-only site has no account to report, and asking would only spend a
+// request on a 401.
 func account(ctx context.Context, snap *app.Snapshot, site string) string {
-	if f := snap.Config.Forges[site]; f.Username != "" {
+	f := snap.Config.Forges[site]
+	if f.Username != "" {
 		return f.Username
+	}
+	if f.ReadOnly() {
+		return ""
 	}
 	id, ok := snap.Providers[site].(forge.Identity)
 	if !ok {
@@ -85,8 +94,10 @@ func (u *UI) siteRows(ctx context.Context) []siteRow {
 	for i, n := range names {
 		f := cfg.Forges[n]
 		rows[i] = siteRow{Name: n, Kind: kindLabel(f.Type), Address: siteAddress(f),
-			FromFile: cfg.ForgeOrigin(n) == config.OriginFile, Mirrors: mirrorsUsing(cfg, n)}
-		wg.Go(func() { rows[i].Account = account(ctx, snap, n) })
+			FromFile: cfg.ForgeOrigin(n) == config.OriginFile, Mirrors: mirrorsUsing(cfg, n), ReadOnly: f.ReadOnly()}
+		if !f.ReadOnly() {
+			wg.Go(func() { rows[i].Account = account(ctx, snap, n) })
+		}
 	}
 	wg.Wait()
 	return rows
@@ -222,7 +233,7 @@ func (u *UI) readSite(f *Form, name string, old *config.Forge) (string, config.F
 	if fg.Token == "" {
 		switch {
 		case old == nil:
-			f.SetError("token", "Paste the token you created on the site.")
+			// No token: a public site that mirrors can only read from.
 		case fg.Type != old.Type || fg.URL != old.URL:
 			// The old token is never sent to another address or kind of
 			// site: it could be a server run by someone else.
@@ -277,7 +288,11 @@ func (u *UI) addSite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u.log().Info("web UI: site added", "site", name, "type", fg.Type, "account", login)
-	u.setFlash(w, r, FlashSuccess, "Site "+name+" saved. Connected as "+login+".")
+	msg := "Site " + name + " saved. Connected as " + login + "."
+	if fg.ReadOnly() {
+		msg = "Site " + name + " saved as a public, read-only site: mirrors can only copy from it."
+	}
+	u.setFlash(w, r, FlashSuccess, msg)
 	redirect(w, r, "/sites")
 }
 

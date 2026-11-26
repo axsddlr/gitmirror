@@ -173,6 +173,10 @@ access. A site you copy **to** needs write access, because gitmirror creates and
 there. The **Add a site** page shows the same list under **Which token permissions are needed**.
 Full tables are in the reference under [Token permissions](reference.md#token-permissions).
 
+A token is **optional** when you only copy public repositories: leave the token field empty and the
+site becomes a public, read-only site. gitmirror then reads it anonymously, and such a site can
+only be chosen as the place to copy **from**, never as the place to copy **to**.
+
 ### GitHub (copy from, in this guide)
 
 1. GitHub → your avatar → **Settings** → **Developer settings** → **Personal access tokens** →

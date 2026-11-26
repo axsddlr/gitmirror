@@ -53,12 +53,22 @@ Rules of the loader (`internal/config`):
 |---|---|---|---|---|
 | `type` | string | none (required) | lower-cased and trimmed; one of `github`, `gitea` (`config.KnownForgeTypes`). Use `gitea` for Forgejo (the web UI's "Forgejo" kind is stored as `gitea` too). | Provider type. |
 | `url` | string | none | Required for `gitea`. If set: absolute `http`/`https` URL with a host. Trailing `/` trimmed. | Base URL. For `github` the provider default is `https://api.github.com` (set `url` for GitHub Enterprise). The normalised URL is recorded with the ownership of every destination created or adopted on this forge; changing it to another server makes those destinations unowned (they need `adopt: true` again). |
-| `token` | string | none | Exactly one of `token` / `token_file` is required; both set is an error. | API token; also used for git over HTTPS. |
+| `token` | string | none | Optional; `token` and `token_file` must not both be set. | API token; also used for git over HTTPS. Without it the forge is a public, read-only site (see below). |
 | `token_file` | string | none | File must exist and be non-empty after trimming. | Path of a file holding the token (Docker/Compose secrets, systemd credentials). |
 | `username` | string | `x-access-token` (github), `git` (gitea) | none | Username for git-over-HTTP basic auth. |
 
 Forges added in the web UI ("sites") are stored in the state database with their token encrypted
 (AES-256-GCM, key in `<state_dir>/secret.key`); `token_file` is not available for them.
+
+**Public, read-only sites.** A forge without a token is read anonymously: no `Authorization`
+header is sent and the git transport uses no credentials, which is all a public repository needs.
+Such a site can be named in a rule's `from` but never in its `to` — validation rejects that,
+because gitmirror could not create a repository or push to it. The web UI's add-site form accepts
+an empty token for the same reason and hides the site from the "Copy to" step. Two limits follow
+from reading anonymously: private repositories are invisible, and GitHub allows only 60 API
+requests per hour per address instead of 5 000 (listing a large account can hit that). An
+`${VAR}` that resolves to an empty token is still an error — a token you meant to set but did not
+is a mistake, while leaving `token` out is a choice.
 
 ## `defaults`
 

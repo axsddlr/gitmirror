@@ -18,7 +18,7 @@
     <legend>Site to copy from</legend>
     {{- with $e.src}}<p class="error">{{.}}</p>{{end}}
     {{- range $v.Sites}}
-    <label class="choice"><input type="radio" name="src" value="{{.Name}}"{{if eq .Name $w.Src}} checked{{end}}> <strong>{{.Name}}</strong> <span class="hint-inline">{{.Kind}}, {{.Address}}{{if .Account}}, signed in as {{.Account}}{{end}}</span></label>
+    <label class="choice"><input type="radio" name="src" value="{{.Name}}"{{if eq .Name $w.Src}} checked{{end}}> <strong>{{.Name}}</strong> <span class="hint-inline">{{.Kind}}, {{.Address}}{{if .Account}}, signed in as {{.Account}}{{else if .ReadOnly}}, public, read-only{{end}}</span></label>
     {{- end}}
     <p class="hint">Missing a site? <a href="/sites/new">Add it on the Sites page</a> first.</p>
   </fieldset>
@@ -84,8 +84,11 @@
   <fieldset class="choices{{if $e.dst}} has-error{{end}}">
     <legend>Site to copy to</legend>
     {{- with $e.dst}}<p class="error">{{.}}</p>{{end}}
-    {{- range $v.Sites}}
+    {{- range $v.DstSites}}
     <label class="choice"><input type="radio" name="dst" value="{{.Name}}"{{if eq .Name $w.Dst}} checked{{end}}> <strong>{{.Name}}</strong> <span class="hint-inline">{{.Kind}}, {{.Address}}{{if .Account}}, signed in as {{.Account}}{{end}}</span></label>
+    {{- end}}
+    {{- if not $v.DstSites}}
+    <p class="hint">No site can be copied to yet: a site without a token can only be copied from. <a href="/sites/new">Add a site</a> with a token.</p>
     {{- end}}
   </fieldset>
   <div class="field{{if $e.dstowner}} has-error{{end}}">

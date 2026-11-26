@@ -107,7 +107,6 @@ func TestAddSiteValidation(t *testing.T) {
 		want string
 	}{
 		{url.Values{"kind": {"gitea"}, "token": {gtToken}}, "Enter the address of your server"},
-		{url.Values{"kind": {"github"}, "token": {""}}, "Paste the token"},
 		{url.Values{"kind": {"other"}, "token": {ghToken}}, "Choose the kind of site"},
 		{url.Values{"kind": {"github"}, "token": {ghToken}, "name": {"Bad Name"}}, "Use only lowercase letters"},
 		{url.Values{"kind": {"gitea"}, "url": {"ftp://x.example"}, "token": {gtToken}}, "Enter the address of your server"},

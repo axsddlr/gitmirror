@@ -91,9 +91,6 @@ func (c *Config) validateForge(name string, f Forge, add func(string, ...any)) {
 	} else if u, err := url.Parse(f.URL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		add("%s: url must be an absolute http or https URL", loc)
 	}
-	if f.Token == "" && f.TokenFile == "" {
-		add("%s: one of token or token_file is required", loc)
-	}
 }
 
 func validateSettings(loc, interval string, include []string, visibility, onDeleted, grace string, required bool, add func(string, ...any)) {
@@ -205,9 +202,12 @@ func (c *Config) validateRule(r Rule, seen map[string]int, idx int, add func(str
 		}
 	}
 
-	// Destination.
-	if _, ok := c.Forges[r.To.Forge]; !ok {
+	// Destination. A site without a token is read anonymously, so it can only
+	// be a source: gitmirror could not create a repository or push to it.
+	if dst, ok := c.Forges[r.To.Forge]; !ok {
 		add("to.forge %q is not defined", r.To.Forge)
+	} else if dst.ReadOnly() {
+		add("to.forge %q has no token, so it can only be copied from; add a token to copy to it", r.To.Forge)
 	}
 	switch {
 	case (r.To.Owner == "") == (r.To.Repo == ""):

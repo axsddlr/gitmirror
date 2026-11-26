@@ -17,8 +17,9 @@ func TestEmptyInterpolatedSecretNamesVariable(t *testing.T) {
 			t.Fatalf("val %q: err = %v", val, err)
 		}
 	}
-	// a literal empty token keeps the generic message
-	if _, err := parse(t, gitea(""), nil, nil); err == nil || !strings.Contains(err.Error(), "one of token or token_file is required") {
+	// a literal empty token is a public, read-only site, so the rule that
+	// copies to it is refused for that reason rather than for being empty
+	if _, err := parse(t, gitea(""), nil, nil); err == nil || !strings.Contains(err.Error(), "can only be copied from") {
 		t.Fatalf("literal empty: %v", err)
 	}
 	// non-empty works

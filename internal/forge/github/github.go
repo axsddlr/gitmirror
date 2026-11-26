@@ -74,20 +74,22 @@ func New(o forge.Options) (*Provider, error) {
 }
 
 func newWithEndpoints(o forge.Options, apiURL, uploadURL, gitBase string) (*Provider, error) {
-	if o.Token == "" {
-		return nil, errors.New("github: token is required")
-	}
 	hc := o.HTTPClient
 	if hc == nil {
 		hc = &http.Client{}
 	}
-	client, err := gh.NewClient(
+	opts := []gh.ClientOptionsFunc{
 		gh.WithHTTPClient(hc),
-		gh.WithAuthToken(o.Token),
 		gh.WithEnterpriseURLs(apiURL, uploadURL),
 		// Waiting out rate limits is the HTTP client's job, not go-github's.
 		gh.WithDisableRateLimitCheck(),
-	)
+	}
+	// An empty token means a public, read-only site: requests go out
+	// anonymously and only public repositories can be read.
+	if o.Token != "" {
+		opts = append(opts, gh.WithAuthToken(o.Token))
+	}
+	client, err := gh.NewClient(opts...)
 	if err != nil {
 		return nil, fmt.Errorf("github: build client: %w", err)
 	}
@@ -400,6 +402,15 @@ func (p *Provider) UpdateRepoSettings(ctx context.Context, owner, name string, s
 }
 
 // RateLimit implements forge.Provider using the core resource.
+// Probe implements forge.Probe. The rate-limit endpoint answers without a
+// token, so it shows that this address speaks GitHub's API.
+func (p *Provider) Probe(ctx context.Context) error {
+	if _, _, err := p.client.RateLimit.Get(ctx); err != nil {
+		return p.wrap("probe site", err)
+	}
+	return nil
+}
+
 func (p *Provider) RateLimit(ctx context.Context) (forge.Rate, error) {
 	rl, _, err := p.client.RateLimit.Get(ctx)
 	if err != nil {

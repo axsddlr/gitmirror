@@ -298,7 +298,9 @@ func TestSecrets(t *testing.T) {
 		{"token ok", gitea("token: abc"), ""},
 		{"token_file ok", gitea("token_file: /s/tok"), ""},
 		{"both", gitea("token: abc, token_file: /s/tok"), `forges.home: only one of token and token_file`},
-		{"neither", gitea("username: u"), `forges.home: one of token or token_file is required`},
+		// No token is a public, read-only site: allowed as a source, refused
+		// as a destination.
+		{"no token", gitea("username: u"), `to.forge "home" has no token, so it can only be copied from`},
 		{"empty file", gitea("token_file: /s/empty"), `forges.home.token_file`},
 		{"missing file", gitea("token_file: /s/none"), `forges.home.token_file`},
 		{"webhook both", doc("server: {webhook_secret: a, webhook_secret_file: /s/wh}", okRule), `server: only one of webhook_secret and webhook_secret_file`},

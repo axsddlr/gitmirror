@@ -157,8 +157,9 @@ func TestNewDefaultsAndGHE(t *testing.T) {
 }
 
 func TestNewRequiresTokenAndRegisters(t *testing.T) {
-	if _, err := New(forge.Options{}); err == nil {
-		t.Fatal("expected error for empty token")
+	// No token means a public, read-only site: allowed, with no credentials.
+	if p, err := New(forge.Options{}); err != nil || p.GitAuth().Token != "" {
+		t.Fatalf("site without a token: %v (%+v)", err, p)
 	}
 	p, err := forge.New("github", forge.Options{Token: "t"})
 	if err != nil {

@@ -77,9 +77,8 @@ func New(o forge.Options) (*Provider, error) {
 	if err != nil || u.Scheme == "" || u.Host == "" {
 		return nil, fmt.Errorf("gitea: invalid URL %q", o.URL)
 	}
-	if o.Token == "" {
-		return nil, errors.New("gitea: token is required")
-	}
+	// An empty token means a public, read-only site: requests go out
+	// anonymously and only public repositories can be read.
 	hc := o.HTTPClient
 	if hc == nil {
 		hc = &http.Client{}
@@ -118,6 +117,21 @@ func (p *Provider) GitAuth() forge.Auth {
 
 // RateLimit implements forge.Provider; Gitea exposes no rate-limit API.
 func (p *Provider) RateLimit(context.Context) (forge.Rate, error) { return forge.Rate{}, nil }
+
+// Probe implements forge.Probe. The version endpoint needs no token, so it
+// shows that this address answers as a Gitea or Forgejo server.
+func (p *Provider) Probe(ctx context.Context) error {
+	var v struct {
+		Version string `json:"version"`
+	}
+	if _, err := p.do(ctx, http.MethodGet, "/version", nil, nil, &v); err != nil {
+		return err
+	}
+	if v.Version == "" {
+		return errors.New("gitea: the site did not report a version")
+	}
+	return nil
+}
 
 // ---- HTTP plumbing ----
 
@@ -168,7 +182,9 @@ func (p *Provider) newReq(ctx context.Context, method, path string, q url.Values
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "token "+p.token)
+	if p.token != "" {
+		req.Header.Set("Authorization", "token "+p.token)
+	}
 	req.Header.Set("Accept", "application/json")
 	return req, nil
 }
@@ -840,7 +856,7 @@ func (p *Provider) DownloadAsset(ctx context.Context, owner, name string, a forg
 	if err != nil {
 		return nil, err
 	}
-	if p.sameOrigin(u) {
+	if p.token != "" && p.sameOrigin(u) {
 		req.Header.Set("Authorization", "token "+p.token)
 	}
 	resp, err := p.hc.Do(req)
