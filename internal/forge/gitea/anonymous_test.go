@@ -20,7 +20,9 @@ func TestAnonymousProvider(t *testing.T) {
 		auth = append(auth, r.Header.Get("Authorization"))
 		paths = append(paths, r.Method+" "+r.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
-		io.WriteString(w, `{"version":"1.27.0"}`)
+		if _, err := io.WriteString(w, `{"version":"1.27.0"}`); err != nil {
+			t.Errorf("write version: %v", err)
+		}
 	}))
 	defer srv.Close()
 
@@ -42,7 +44,9 @@ func TestAnonymousProvider(t *testing.T) {
 // An address that answers but is not a Gitea server fails the probe.
 func TestAnonymousProbeRejectsOtherSites(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		io.WriteString(w, `{}`)
+		if _, err := io.WriteString(w, `{}`); err != nil {
+			t.Errorf("write body: %v", err)
+		}
 	}))
 	defer srv.Close()
 
